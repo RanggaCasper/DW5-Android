@@ -49,7 +49,9 @@ const app::GameInfo app::kGame = {
     .options = {{"msaa", nullptr, &game::Opt().msaa},  // game settings kept in the settings file
                 {"smaa", &game::Opt().smaa, nullptr},
                 {"fps_counter", &game::Opt().fps_counter, nullptr},
-                {"frame_skip", &game::Opt().frame_skip, nullptr}},
+                {"frame_skip", &game::Opt().frame_skip, nullptr},
+                {"aspect", nullptr, &game::Opt().aspect},
+                {"hdr_output", &game::Opt().hdr_output, nullptr}},
     .load = nullptr,                        // reads more from the settings file's toml::table
     .save = nullptr,                        // writes more into it
     .init = game::Init,                     // after the settings load, before the window and boot

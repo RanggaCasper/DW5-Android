@@ -14,6 +14,7 @@ struct Options {
     bool hdr_output = false;  // HDR10 on a display that offers it
     bool fps_counter = true;     // the frame rate in the top left corner (Android)
     bool frame_skip = true;      // frames left undrawn while the drawing is behind, the game at its speed (Android)
+    uint32_t aspect = 0;         // the frame's shape on the screen: 0 the TV's, 1 16:9, 2 the whole screen (Android)
 };
 
 inline Options& Opt() {

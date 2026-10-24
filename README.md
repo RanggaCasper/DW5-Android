@@ -24,8 +24,9 @@ Android 10 (API 29) or newer, arm64, with a Vulkan 1.1 driver.
    access is allowed, and starts the game as soon as it finds the files. A copy in the app's own
    `Android/data/com.datfooldive.dw5/files/assets` works too.
 
-`settings.toml` and the saves (`hdd`) live in the app's own files folder. There is no log file on the device: the
-release writes its Report and Error lines to stderr, which `adb logcat` carries.
+The saves (`hdd`) live in the game's folder, beside its files, so uninstalling the app does not take the progress
+with it. `settings.toml` stays in the app's own files folder. There is no log file on the device: the release writes
+its Report and Error lines to stderr, which `adb logcat` carries.
 
 ## Controls
 
@@ -52,18 +53,21 @@ be worked without letting go of the pad.
 
 ## Settings
 
-The gear opens a panel over the game, which keeps running behind it and reads no touch until it closes. Each row is a
-line of choices, the one in use lit; a tap takes it at once and writes `settings.toml`.
+The gear opens a panel over the game, which keeps running behind it and reads no touch until it closes. It is laid
+out as a row per setting: the label left, the value between two arrows right, sections over them, and Back and
+Defaults at the foot. A tap on an arrow, the arrow keys or the pad's D-pad steps a value, which is applied and
+written to `settings.toml` at once.
 
 | row | | default |
 | --- | --- | --- |
-| **Resolution** | 33, 50, 67, 75 or 100% of the output height | 67% |
+| **Render resolution** | 20 to 200% of the output height in steps of 5, with the pixels it makes | 67% |
 | **Anti-aliasing** | OFF, SMAA over the finished frame, or MSAA 2X / 4X on the scene | OFF |
-| **Glow** | the bloom over bright parts of the frame | ON |
-| **Draw distance** | 1X to 4X the stage's terrain and scenery distances, applied live | 1X |
+| **Anisotropic filtering** | the game's own, or 2X to 16X over it | GAME DEFAULT |
+| **Vertical sync** | FIFO, or immediate / mailbox tearing without it | ON |
 | **Frame skip** | AUTO: a frame left undrawn while the drawing is behind, the game still at its speed | AUTO |
-| **VSync** | FIFO, or immediate / mailbox tearing without it | ON |
+| **Aspect ratio** | the TV's shape, 16:9, or the whole screen | ORIGINAL |
 | **FPS counter** | the frame rate in the top left corner, amber under the cap | ON |
+| **HDR** | HDR10 when the display offers it; greyed when it does not | OFF |
 
 The frame rate cap (60) and the display mode are only in the file. 30 is not a cap the port offers: the title counts
 its timing at 60 and runs at half speed below it.

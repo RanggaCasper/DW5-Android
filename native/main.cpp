@@ -244,6 +244,30 @@ void WriteDefaultSettings(const std::filesystem::path& path) {
 
 std::string Utf8(const std::wstring& text) { return Narrow(text); }
 
+// the saves were kept in the app's own files folder, which an uninstall wipes: the first run that finds the game
+// takes them into the game's folder, so the progress already made is not left behind. True when the game's folder is
+// the one to use, false when the old saves could not be moved and stay where they are
+bool TakeSaves(const std::filesystem::path& to) {
+    std::error_code ec;
+    const std::filesystem::path from = ExeDir() / "hdd";
+    if (std::filesystem::exists(to, ec)) return true;           // already there, the app's own left alone
+    if (!std::filesystem::is_directory(from, ec)) return true;  // a fresh install: made there
+    std::filesystem::rename(from, to, ec);
+    if (ec) {
+        ec.clear();
+        std::filesystem::copy(from, to, std::filesystem::copy_options::recursive, ec);
+        if (ec) {
+            LOGW("saves: %s did not move to %s: %s", from.c_str(), to.c_str(), ec.message().c_str());
+            std::error_code ignored;
+            std::filesystem::remove_all(to, ignored);  // what was half copied
+            return false;
+        }
+        std::filesystem::remove_all(from, ec);
+    }
+    LOGI("saves: moved from %s to %s", from.c_str(), to.c_str());
+    return true;
+}
+
 std::filesystem::path ExeDir() {
     static const std::filesystem::path dir = [] {
         const char* internal = SDL_GetAndroidInternalStoragePath();
@@ -421,6 +445,11 @@ int main(int argc, char** argv) {
     app::GameFiles game;
     if (!app::FindGame(game)) return 1;
     if (!app::PrepareGameCode(game)) return 1;
+    // the saves go in the game's own folder, beside its files: an uninstall takes the app's folder, not this one.
+    // An install that still has them in the app's own files takes them along, and keeps them there if they cannot
+    // be moved, so no progress is lost
+    std::filesystem::path hdd = game.dir / "hdd";
+    if (!app::TakeSaves(hdd)) hdd = app::ExeDir() / "hdd";
 
     app::g_window = SDL_CreateWindow(title.c_str(), 1280, 720, SDL_WINDOW_VULKAN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (!app::g_window) {
@@ -440,7 +469,7 @@ int main(int argc, char** argv) {
     input::Init();
     touch::Init();
     if (app::kGame.window) app::kGame.window(app::g_window);
-    if (!kernel::Boot(std::move(game.xbe), IMAGE_XBE, game.dir.string(), (app::ExeDir() / "hdd").string())) {
+    if (!kernel::Boot(std::move(game.xbe), IMAGE_XBE, game.dir.string(), hdd.string())) {
         app::ShowError(L"The game failed to start, see the log in the logs folder.");
         return 1;
     }

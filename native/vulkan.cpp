@@ -4767,12 +4767,16 @@ void VulkanBackend::BlitFrame(Target& t, Image* r, VkFormat rtv) {
     // the shape the console puts out, 16:9 in its widescreen mode: the title draws for that, not for the phone's
     // wider screen, so the picture is pillarboxed rather than stretched across it
     float tv = app::Widescreen() ? 16.0f / 9.0f : 4.0f / 3.0f;
+    // or the shape the panel's Aspect ratio asks for: 16:9, or FULL, the whole screen whatever rows are kept
+    uint32_t shape = game::Opt().aspect;
+    if (shape == 1) tv = 16.0f / 9.0f;
     // only the rows the title drew: the black it leaves under its picture is not shown, and the rows kept are as
     // tall as on the TV
     bool cut = shown_rows_ && shown_rows_ < t.gh;
     float aspect = cut ? tv * float(t.gh) / float(shown_rows_) : tv;
     float w = float(bb_w_);
     float h = float(bb_h_);
+    if (shape >= 2) aspect = w / std::max(h, 1.0f);
     float vw = std::min(w, h * aspect);
     float vh = vw / aspect;
     float uv[4] = {0, 0, 1, cut ? float(shown_rows_) / float(t.gh) : 1.0f};
