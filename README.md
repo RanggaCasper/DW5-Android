@@ -39,14 +39,15 @@ The controls sit where the original pad has them:
 | **D-pad** | the menus, four buttons apart so a thumb on one does not touch the next |
 | **START** / **BACK** | pause, map |
 | **LT** / **RT** | the triggers |
+| **L3** / **R3** | the stick clicks, under each thumb; both at once for a rage |
 | **gear** | the settings panel, top middle |
 
 The buttons are drawn with the pad's own colours, from `native/ui/btn_*.rgba` (RGBA8888, 96 x 96, embedded by CMake:
 the Android build has no image decoder). Their layout follows the Duke pad drawing xemu ships, `data/duke.svg`; that
 file is a colour-coded mask for xemu's own UI, so the glyphs here are drawn to match it rather than copied from it.
 
-A controller works as on the Xbox, with its rumble, and the touch controls stay out of its way. A keyboard works as
-port 1's pad, under a real pad if one is plugged in. The panel takes the D-pad and **A** as well as a finger, so it can
+A controller works as on the Xbox, with its rumble; while one is plugged in the on-screen controls are hidden, the
+gear staying for the panel. A keyboard works as port 1's pad, under a real pad if one is plugged in. The panel takes the D-pad and **A** as well as a finger, so it can
 be worked without letting go of the pad.
 
 ## Settings

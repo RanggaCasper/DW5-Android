@@ -14,6 +14,7 @@ struct Pad {
 void Init();  // window thread, before boot; the game code window starts it earlier
 // Linux: the window thread's event loop has SDL's events, a controller plugged in or out comes from it
 void OnDevice(bool added, uint32_t id);
+bool Connected();  // a real controller is plugged in, GameInfo::pad and the keyboard left out
 uint16_t HeldOnAnyController();  // face buttons as XINPUT_GAMEPAD_A/B/X/Y masks, GameInfo::pad left out
 // the controller on that port, then GameInfo::pad
 Pad Poll(int port);

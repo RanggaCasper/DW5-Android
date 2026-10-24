@@ -128,6 +128,14 @@ Pad Read(int port) {
     return p;
 }
 
+bool Connected() {
+    std::lock_guard lock(g_lock);
+    UpdatePads();
+    for (SDL_Gamepad* pad : g_pads)
+        if (pad) return true;
+    return false;
+}
+
 uint16_t HeldOnAnyController() {
     constexpr std::pair<SDL_GamepadButton, uint16_t> kFaceButtons[] = {
         {SDL_GAMEPAD_BUTTON_SOUTH, 0x1000}, {SDL_GAMEPAD_BUTTON_EAST, 0x2000},

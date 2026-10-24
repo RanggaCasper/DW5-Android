@@ -28,15 +28,17 @@ namespace {
 enum Role : int { kNone = -1, kStick = 0, kCamera = 1, kButton = 2 };
 // the pad's analog buttons, in input::Pad::analog order
 enum Analog : int { kA = 0, kB = 1, kX = 2, kY = 3, kWhite = 4, kBlack = 5, kLeftTrigger = 6, kRightTrigger = 7 };
-enum Bit : uint16_t { kUp = 1 << 0, kDown = 1 << 1, kLeft = 1 << 2, kRight = 1 << 3, kStart = 1 << 4, kBack = 1 << 5 };
+enum Bit : uint16_t { kUp = 1 << 0, kDown = 1 << 1, kLeft = 1 << 2, kRight = 1 << 3, kStart = 1 << 4, kBack = 1 << 5,
+                       kLeftThumb = 1 << 6, kRightThumb = 1 << 7 };
 // the on-screen buttons, in the order the layout and the art have them
 enum Button : int { kBtnA = 0, kBtnB = 1, kBtnX = 2, kBtnY = 3, kBtnStart = 4, kBtnBack = 5, kBtnDpad = 6,
-                     kBtnLT = 7, kBtnRT = 8, kBtnCount = 9 };
+                     kBtnLT = 7, kBtnRT = 8, kBtnL3 = 9, kBtnR3 = 10, kBtnCount = 11 };
 
 std::atomic<float> g_lx{0}, g_ly{0};  // the stick, -1 to 1, y up
 std::atomic<float> g_rx{0}, g_ry{0};  // the camera's pending turn, -1 to 1
 std::atomic<uint64_t> g_analog{0};    // one byte per analog button
 std::atomic<uint32_t> g_buttons{0};   // Bit
+std::atomic<bool> g_pad{false};       // a controller is plugged in: the screen's controls are hidden while one is
 
 struct Touch {
     SDL_FingerID id;
@@ -45,6 +47,14 @@ struct Touch {
 };
 std::mutex g_lock;
 std::vector<Touch> g_touches;
+
+// what the fingers held lets go: the panel opened, or a controller took over
+void ReleaseAll() {  // g_lock held
+    g_touches.clear();
+    g_analog = 0;
+    g_buttons = 0;
+    g_lx = g_ly = g_rx = g_ry = 0;
+}
 
 struct Layout {
     float w, h, s;
@@ -65,35 +75,38 @@ Layout Make(float w, float h) {
     l.w = w;
     l.h = h;
     l.s = std::min(w, h);
-    l.stick_r = l.s * 0.15f;
-    l.stick[0] = w * 0.15f;
-    l.stick[1] = h * 0.70f;
-    l.btn_r = l.s * 0.052f;
-    float d = l.s * 0.088f;
+    l.stick_r = l.s * 0.11f;
+    l.stick[0] = w * 0.13f;
+    l.stick[1] = h * 0.76f;
+    l.btn_r = l.s * 0.075f;
+    float d = l.s * 0.12f;
     float cx = w * 0.855f, cy = h * 0.70f;
     l.btn[kBtnA][0] = cx;      l.btn[kBtnA][1] = cy + d;
     l.btn[kBtnB][0] = cx + d;  l.btn[kBtnB][1] = cy;
     l.btn[kBtnX][0] = cx - d;  l.btn[kBtnX][1] = cy;
     l.btn[kBtnY][0] = cx;      l.btn[kBtnY][1] = cy - d;
-    // the arrows far enough apart that a thumb on one does not touch the next
-    l.arrow_r = l.s * 0.062f;
-    l.dpad[0] = w * 0.33f;
-    l.dpad[1] = h * 0.80f;
-    float off = l.s * 0.105f;
+    // the arrows above the stick, far enough apart that a thumb on one does not touch the next
+    l.arrow_r = l.s * 0.057f;
+    l.dpad[0] = l.stick[0];
+    l.dpad[1] = l.stick[1] - l.stick_r - l.arrow_r - l.s * 0.20f;
+    float off = l.s * 0.100f;
     const float dirs[4][2] = {{0, -1}, {0, 1}, {-1, 0}, {1, 0}};
     for (int a = 0; a < 4; a++) {
         l.arrow[a][0] = l.dpad[0] + dirs[a][0] * off;
         l.arrow[a][1] = l.dpad[1] + dirs[a][1] * off;
     }
-    l.pill_w = l.s * 0.115f;
-    l.pill_h = l.s * 0.052f;
+    l.pill_w = l.s * 0.165f;
+    l.pill_h = l.s * 0.075f;
     l.pill[kBtnBack][0] = w * 0.42f;  l.pill[kBtnBack][1] = h * 0.09f;
     l.pill[kBtnStart][0] = w * 0.58f; l.pill[kBtnStart][1] = h * 0.09f;
     l.pill[kBtnLT][0] = w * 0.09f;    l.pill[kBtnLT][1] = h * 0.09f;
     l.pill[kBtnRT][0] = w * 0.91f;    l.pill[kBtnRT][1] = h * 0.09f;
+    // the stick clicks, under each thumb and out of the stick's and the arrows' reach: rage is both at once
+    l.pill[kBtnL3][0] = w * 0.235f;   l.pill[kBtnL3][1] = h * 0.92f;
+    l.pill[kBtnR3][0] = w * 0.70f;    l.pill[kBtnR3][1] = h * 0.92f;
     l.gear[0] = w * 0.5f;
     l.gear[1] = h * 0.09f;
-    l.gear_r = l.pill_h * 0.62f;
+    l.gear_r = l.s * 0.0322f;  // the pills grew, the gear stays the size it was
     return l;
 }
 
@@ -107,11 +120,11 @@ bool InPill(const Layout& l, float x, float y, const float c[2]) {
 
 int HitTest(const Layout& l, float x, float y) {
     if (InCircle(x, y, l.gear, l.gear_r * 1.4f)) return kGear;
-    // the panel takes every other touch while it is open
-    if (menu::Open()) return kNone;
+    // the panel takes every other touch while it is open, and a pad takes them all while one is plugged in
+    if (menu::Open() || input::Connected()) return kNone;
     for (int b = 0; b < 4; b++)
         if (InCircle(x, y, l.btn[b], l.btn_r * 1.15f)) return kButton + b;
-    for (int b : {kBtnStart, kBtnBack, kBtnLT, kBtnRT})
+    for (int b : {kBtnStart, kBtnBack, kBtnLT, kBtnRT, kBtnL3, kBtnR3})
         if (InPill(l, x, y, l.pill[b])) return kButton + b;
     for (int a = 0; a < 4; a++)
         if (InCircle(x, y, l.arrow[a], l.arrow_r * 1.1f)) return kArrow + a;
@@ -127,8 +140,11 @@ void PressButton(int index, bool down) {
         uint32_t shift = uint32_t(kAnalogOf[index]) * 8;
         v = down ? (v | (0xFFull << shift)) : (v & ~(0xFFull << shift));
         g_analog = v;
-    } else if (index == kBtnStart || index == kBtnBack) {
-        uint16_t bit = index == kBtnStart ? kStart : kBack;
+    } else if (index == kBtnStart || index == kBtnBack || index == kBtnL3 || index == kBtnR3) {
+        uint16_t bit = index == kBtnStart ? kStart
+                     : index == kBtnBack  ? kBack
+                     : index == kBtnL3    ? kLeftThumb
+                                          : kRightThumb;
         uint32_t v = g_buttons.load();
         v = down ? (v | bit) : (v & ~uint32_t(bit));
         g_buttons = v;
@@ -186,10 +202,7 @@ void Event(const SDL_Event& e) {
             if (role == kGear) {
                 // what the fingers held lets go: the panel opens over the game, which reads no touch until it closes
                 menu::Toggle();
-                g_touches.clear();
-                g_analog = 0;
-                g_buttons = 0;
-                g_lx = g_ly = g_rx = g_ry = 0;
+                ReleaseAll();
                 return;
             }
             g_touches.push_back({e.tfinger.fingerID, role, x, y});
@@ -301,8 +314,18 @@ void Draw() {
         dl->AddPolyline(pts, kTeeth * 4, stroke, ImDrawFlags_Closed, width);
         dl->AddCircle(c, r * 0.27f, stroke, 24, width);
     }
+    // a controller plugged in takes the pad's place: its controls are not drawn and take no touch, the gear staying
+    // for the panel; whatever a finger held when it came in lets go
+    bool pad = input::Connected();
+    if (pad != g_pad.load()) {
+        g_pad = pad;
+        if (pad) {
+            std::lock_guard lock(g_lock);
+            ReleaseAll();
+        }
+    }
     // the panel is over the game: the pad's controls are not drawn and take no touch until it closes
-    if (menu::Open()) return;
+    if (menu::Open() || pad) return;
 
     // the stick
     dl->AddCircleFilled(ImVec2(l.stick[0], l.stick[1]), l.stick_r, fill, 48);
@@ -344,7 +367,8 @@ void Draw() {
     static const struct {
         int button;
         const char* text;
-    } kPills[] = {{kBtnBack, "BACK"}, {kBtnStart, "START"}, {kBtnLT, "LT"}, {kBtnRT, "RT"}};
+    } kPills[] = {{kBtnBack, "BACK"}, {kBtnStart, "START"}, {kBtnLT, "LT"}, {kBtnRT, "RT"},
+                  {kBtnL3, "L3"},     {kBtnR3, "R3"}};
     for (const auto& p : kPills) {
         ImVec2 c(l.pill[p.button][0], l.pill[p.button][1]);
         dl->AddRectFilled(ImVec2(c.x - l.pill_w / 2, c.y - l.pill_h / 2), ImVec2(c.x + l.pill_w / 2, c.y + l.pill_h / 2),
