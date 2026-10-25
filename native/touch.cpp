@@ -36,7 +36,7 @@ enum Bit : uint16_t { kUp = 1 << 0, kDown = 1 << 1, kLeft = 1 << 2, kRight = 1 <
                        kLeftThumb = 1 << 6, kRightThumb = 1 << 7 };
 // the on-screen buttons, in the order the layout and the art have them
 enum Button : int { kBtnA = 0, kBtnB = 1, kBtnX = 2, kBtnY = 3, kBtnStart = 4, kBtnBack = 5, kBtnDpad = 6,
-                     kBtnLT = 7, kBtnRT = 8, kBtnL3 = 9, kBtnR3 = 10, kBtnCount = 11 };
+                     kBtnLT = 7, kBtnRT = 8, kBtnL3 = 9, kBtnR3 = 10, kBtnMap = 11, kBtnOrders = 12, kBtnCount = 13 };
 
 std::atomic<float> g_lx{0}, g_ly{0};  // the stick, -1 to 1, y up
 std::atomic<float> g_rx{0}, g_ry{0};  // the camera's pending turn, -1 to 1
@@ -78,7 +78,7 @@ constexpr uint32_t kArrowBits[4] = {kUp, kDown, kLeft, kRight};
 // what a fresh install gets and what the editor's RESET puts back.
 enum Unit : int {
     kUnitStick, kUnitA, kUnitB, kUnitX, kUnitY, kUnitDpad, kUnitStart, kUnitBack, kUnitLT, kUnitRT, kUnitL3, kUnitR3,
-    kUnitGear, kUnitCount
+    kUnitGear, kUnitMap, kUnitOrders, kUnitCount  // the last two after the gear, so a layout saved before them keeps its places
 };
 struct Point {
     float x, y;
@@ -97,6 +97,8 @@ constexpr Point kDefaultUnits[kUnitCount] = {
     {0.235f, 0.920f},  // L3
     {0.700f, 0.920f},  // R3
     {0.500f, 0.090f},  // the gear
+    {0.255f, 0.090f},  // MAP, the pad's white button
+    {0.745f, 0.090f},  // ORDERS, the pad's black button
 };
 std::array<Point, kUnitCount> g_units = [] {
     std::array<Point, kUnitCount> a{};
@@ -104,8 +106,9 @@ std::array<Point, kUnitCount> g_units = [] {
     return a;
 }();
 // the pills, in the order the editor numbers them
-constexpr int kPillButton[6] = {kBtnStart, kBtnBack, kBtnLT, kBtnRT, kBtnL3, kBtnR3};
-constexpr int kPillUnit[6] = {kUnitStart, kUnitBack, kUnitLT, kUnitRT, kUnitL3, kUnitR3};
+constexpr int kPillCount = 8;
+constexpr int kPillButton[kPillCount] = {kBtnStart, kBtnBack, kBtnLT, kBtnRT, kBtnL3, kBtnR3, kBtnMap, kBtnOrders};
+constexpr int kPillUnit[kPillCount] = {kUnitStart, kUnitBack, kUnitLT, kUnitRT, kUnitL3, kUnitR3, kUnitMap, kUnitOrders};
 
 std::atomic<bool> g_editing{false};
 int g_drag = -1;            // the unit a finger is moving
@@ -142,6 +145,8 @@ Layout Make(float w, float h) {
     place(kUnitL3, l.pill[kBtnL3]);
     place(kUnitR3, l.pill[kBtnR3]);
     place(kUnitGear, l.gear);
+    place(kUnitMap, l.pill[kBtnMap]);
+    place(kUnitOrders, l.pill[kBtnOrders]);
     // the arrows keep their ring around the d-pad's middle
     const float off = l.s * 0.100f * k;
     const float dirs[4][2] = {{0, -1}, {0, 1}, {-1, 0}, {1, 0}};
@@ -163,7 +168,7 @@ bool InPill(const Layout& l, float x, float y, const float c[2]) {
 // the control under a finger, for the editor: -1 when none is
 int HitUnit(const Layout& l, float x, float y) {
     if (InCircle(x, y, l.gear, l.gear_r * 1.4f)) return kUnitGear;
-    for (int i = 0; i < 6; i++)
+    for (int i = 0; i < kPillCount; i++)
         if (InPill(l, x, y, l.pill[kPillButton[i]])) return kPillUnit[i];
     for (int b = 0; b < 4; b++)
         if (InCircle(x, y, l.btn[b], l.btn_r)) return kUnitA + b;
@@ -179,8 +184,8 @@ int HitTest(const Layout& l, float x, float y) {
     if (input::Connected() || loose::Connected()) return kNone;
     for (int b = 0; b < 4; b++)
         if (InCircle(x, y, l.btn[b], l.btn_r * 1.15f)) return kButton + b;
-    for (int b : {kBtnStart, kBtnBack, kBtnLT, kBtnRT, kBtnL3, kBtnR3})
-        if (InPill(l, x, y, l.pill[b])) return kButton + b;
+    for (int i = 0; i < kPillCount; i++)
+        if (InPill(l, x, y, l.pill[kPillButton[i]])) return kButton + kPillButton[i];
     for (int a = 0; a < 4; a++)
         if (InCircle(x, y, l.arrow[a], l.arrow_r * 1.1f)) return kArrow + a;
     if (x < l.w * 0.45f && InCircle(x, y, l.stick, l.stick_r * 1.7f)) return kStick;
@@ -203,9 +208,14 @@ void PressButton(int index, bool down) {
         uint32_t v = g_buttons.load();
         v = down ? (v | bit) : (v & ~uint32_t(bit));
         g_buttons = v;
-    } else if (index == kBtnLT || index == kBtnRT) {
+    } else if (index == kBtnLT || index == kBtnRT || index == kBtnMap || index == kBtnOrders) {
+        // the triggers and the pad's two small buttons are all analog in the pad's own state
+        const int which = index == kBtnLT    ? kLeftTrigger
+                        : index == kBtnRT    ? kRightTrigger
+                        : index == kBtnMap   ? kWhite
+                                             : kBlack;
         uint64_t v = g_analog.load();
-        uint32_t shift = uint32_t(index == kBtnLT ? kLeftTrigger : kRightTrigger) * 8;
+        uint32_t shift = uint32_t(which) * 8;
         v = down ? (v | (0xFFull << shift)) : (v & ~(0xFFull << shift));
         g_analog = v;
     }
@@ -236,10 +246,10 @@ const char* const kArtPad[4] = {ui_icons::kBtnA, ui_icons::kBtnB, ui_icons::kBtn
 // A jump, B musou, X attack, Y charge: the pad's diamond read the way the game's manual reads it, not the order the
 // buttons are numbered in
 const char* const kArtGame[4] = {ui_icons::kActJump, ui_icons::kActMusou, ui_icons::kActLight, ui_icons::kActHeavy};
-const char* const kPillArt[6] = {ui_icons::kActOrders, ui_icons::kActPause, ui_icons::kActGuard,
-                                 ui_icons::kActShoot,  ui_icons::kActMove,  ui_icons::kActRage};
+const char* const kPillArt[kPillCount] = {ui_icons::kActBack,  ui_icons::kActPause, ui_icons::kActGuard, ui_icons::kActShoot,
+                                          ui_icons::kActMove,  ui_icons::kActRage,  ui_icons::kActMap,   ui_icons::kActOrders};
 ImTextureID g_tex[4];
-ImTextureID g_pill_tex[6];
+ImTextureID g_pill_tex[kPillCount];
 int g_art_style = -1;  // the style the textures were made for, the panel's setting having changed since
 
 int ArtStyle() { return int(std::min<uint32_t>(game::Opt().controls_style, 1)); }
@@ -254,7 +264,7 @@ void EnsureArt() {
     const char* const* art = style ? kArtGame : kArtPad;
     for (int b = 0; b < 4; b++) g_tex[b] = Icon(art[b]);
     if (style)
-        for (int i = 0; i < 6; i++) g_pill_tex[i] = Icon(kPillArt[i]);
+        for (int i = 0; i < kPillCount; i++) g_pill_tex[i] = kPillArt[i] ? Icon(kPillArt[i]) : nullptr;
     g_art_style = style;
 }
 
@@ -405,7 +415,7 @@ void DrawEditor(const Layout& l, ImDrawList* dl) {
     dl->AddCircle(ImVec2(l.stick[0], l.stick[1]), l.stick_r, ring, 48, 2.0f);
     for (int b = 0; b < 4; b++) dl->AddCircle(ImVec2(l.btn[b][0], l.btn[b][1]), l.btn_r, ring, 32, 2.0f);
     dl->AddCircle(ImVec2(l.dpad[0], l.dpad[1]), l.arrow_r * 2.0f, ring, 32, 2.0f);
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < kPillCount; i++) {
         const float* c = l.pill[kPillButton[i]];
         dl->AddRect(ImVec2(c[0] - l.pill_w / 2, c[1] - l.pill_h / 2),
                     ImVec2(c[0] + l.pill_w / 2, c[1] + l.pill_h / 2), ring, l.pill_h / 2, 0, 2.0f);
@@ -504,9 +514,9 @@ void Draw() {
     static const struct {
         int button;
         const char* text;
-    } kPills[] = {{kBtnBack, "BACK"}, {kBtnStart, "START"}, {kBtnLT, "LT"}, {kBtnRT, "RT"},
-                  {kBtnL3, "L3"},     {kBtnR3, "R3"}};
-    for (int i = 0; i < 6; i++) {
+    } kPills[] = {{kBtnBack, "BACK"},   {kBtnStart, "START"}, {kBtnLT, "LT"},   {kBtnRT, "RT"},
+                  {kBtnL3, "L3"},       {kBtnR3, "R3"},       {kBtnMap, "MAP"}, {kBtnOrders, "ORDERS"}};
+    for (int i = 0; i < kPillCount; i++) {
         const auto& p = kPills[i];
         ImVec2 c(l.pill[p.button][0], l.pill[p.button][1]);
         dl->AddRectFilled(ImVec2(c.x - l.pill_w / 2, c.y - l.pill_h / 2), ImVec2(c.x + l.pill_w / 2, c.y + l.pill_h / 2),

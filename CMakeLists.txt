@@ -99,7 +99,7 @@ foreach(name A B X Y)
 endforeach()
 # what the pad's buttons do in the game, for the panel's other button style: the file's name, the symbol's
 foreach(pair Light:light Heavy:heavy Musou:musou Jump:jump Guard:guard Shoot:shoot Move:move Pause:pause
-             Orders:orders Rage:rage)
+             Orders:orders Rage:rage Map:map Back:back)
     string(REPLACE ":" ";" pair "${pair}")
     list(GET pair 0 symbol)
     list(GET pair 1 file)
