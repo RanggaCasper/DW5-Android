@@ -8,7 +8,6 @@
 
 #include "common/options.h"
 #include "host.h"
-#include "menu.h"
 
 namespace game {
 void InstallCaptureSignal();
@@ -18,7 +17,6 @@ void Init() { InstallCaptureSignal(); }
 // the on-screen controls, the frame rate in the top left corner above LT, and the settings panel
 void Ui(double fps) {
     touch::Draw();
-    menu::Draw();
     if (!game::Opt().fps_counter) return;
     ImGuiIO& io = ImGui::GetIO();
     float size = std::max(io.DisplaySize.y * 0.03f, 12.0f);
@@ -36,6 +34,12 @@ void Ui(double fps) {
 }
 }  // namespace game
 
+namespace {
+// the controls' layout lives in the settings file's table: options hold flags and single values only
+void LoadControls(const void* table) { touch::LoadLayout(table); }
+void SaveControls(void* table) { touch::SaveLayout(table); }
+}  // namespace
+
 // what the runtime asks of the game; strings must be set, hooks may stay null
 const app::GameInfo app::kGame = {
     .title = L"Dynasty Warriors 5",         // window and splash
@@ -51,9 +55,12 @@ const app::GameInfo app::kGame = {
                 {"fps_counter", &game::Opt().fps_counter, nullptr},
                 {"frame_skip", &game::Opt().frame_skip, nullptr},
                 {"aspect", nullptr, &game::Opt().aspect},
+                {"controls_opacity", nullptr, &game::Opt().controls_opacity},
+                {"controls_scale", nullptr, &game::Opt().controls_scale},
+                {"controls_style", nullptr, &game::Opt().controls_style},
                 {"hdr_output", &game::Opt().hdr_output, nullptr}},
-    .load = nullptr,                        // reads more from the settings file's toml::table
-    .save = nullptr,                        // writes more into it
+    .load = LoadControls,                   // reads more from the settings file's toml::table
+    .save = SaveControls,                   // writes more into it
     .init = game::Init,                     // after the settings load, before the window and boot
     .loaded = nullptr,                      // image in memory, before its entry point runs
     .window = nullptr,                      // the game window is up

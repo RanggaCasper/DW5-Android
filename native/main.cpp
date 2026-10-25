@@ -465,6 +465,11 @@ int main(int argc, char** argv) {
     io.IniFilename = nullptr;
     io.BackendPlatformName = "sdl3 (android)";
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
+    // The panel scales the text up to a thumb's size, and ImGui's built-in 13 px atlas is a blur once it does:
+    // baked at 26 px instead, every size the panel asks for is drawn from real pixels.
+    ImFontConfig font;
+    font.SizePixels = 26.0f;
+    io.Fonts->AddFontDefault(&font);
 
     input::Init();
     touch::Init();

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+  <!-- light attack: the sword, thin and upright -->
+  <circle cx="48" cy="48" r="46" fill="#6BBE45"/>
+  <g stroke="#fff" stroke-linecap="round" fill="none">
+    <path d="M36 60 L66 30" stroke-width="9"/>
+    <path d="M30 54 L42 66" stroke-width="8"/>
+    <path d="M36 60 L30 66" stroke-width="8"/>
+  </g>
+</svg>

@@ -10,14 +10,21 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.provider.Settings;
+import android.view.InputDevice;
+import android.view.InputEvent;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
+import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
+import android.view.WindowManager;
 import android.widget.Toast;
 
 import java.io.File;
 
 import org.libsdl.app.SDLActivity;
+import org.libsdl.app.SDLControllerManager;
 
 // SDL's activity running libmain.so. The game goes in a DW5 folder on the phone's storage
 // (/storage/emulated/0/DW5) or at the top of an SD card. Reading it needs all files access, a special access Android
@@ -29,6 +36,7 @@ public class DW5Activity extends SDLActivity {
 
     private static DW5Activity current;  // for the toasts the game's threads ask for
     private AlertDialog dialog;
+    private SettingsDialog settings;
     private boolean notNow;  // the player turned the access down this run
 
     @Override
@@ -40,6 +48,7 @@ public class DW5Activity extends SDLActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         current = this;
+        fillDisplay();
         File own = getExternalFilesDir(null);
         if (own != null) new File(own, "assets").mkdirs();
     }
@@ -47,6 +56,7 @@ public class DW5Activity extends SDLActivity {
     @Override
     protected void onDestroy() {
         if (current == this) current = null;
+        if (editor != null) editor.hide();
         super.onDestroy();
     }
 
@@ -57,11 +67,118 @@ public class DW5Activity extends SDLActivity {
         a.runOnUiThread(() -> Toast.makeText(a, text, Toast.LENGTH_LONG).show());
     }
 
+    // A controller some phones' game services pass on as a virtual device (MIUI's took a DualShock 4 on a Redmi
+    // Note 8 Pro): SDL sees no controller in it and drops its input, so the game never learns it is there and the
+    // on-screen controls never give way to it. Its buttons and sticks go to the game as port 0's here
+    // (native/loose.cpp); a controller SDL has goes its own way as before.
+    private static native void nativeLooseKey(int keyCode, boolean down);
+    private static native void nativeLooseAxes(float lx, float ly, float rx, float ry, float lt, float rt, float hx,
+                                               float hy);
+    private static native void nativeLooseRelease();
+
+    // native/settings_bridge.cpp: the panel's values, a change to one of them, and the layout editor's way in
+    static native int[] nativeSettings();
+    static native void nativeSettingsSet(int key, int value, boolean commit);
+    static native void nativeSettingsDefaults();
+    static native void nativeEditLayout();
+    static native void nativeEditEnd();
+    static native void nativeEditReset();
+
+    private LayoutEditor editor;
+
+    // the panel's MOVE CONTROLS: it closes, the controls stay drawn where they are and a finger moves them; the bar
+    // this puts at the bottom of the screen is the editor's Done and Reset
+    public void beginLayoutEdit() {
+        nativeEditLayout();
+        if (editor == null) editor = new LayoutEditor(this);
+        editor.show();
+        hideSystemBars();
+    }
+
+    // the gear (native/touch.cpp): the settings panel over the game, which keeps running behind it
+    public void showSettings() {
+        runOnUiThread(() -> {
+            if (settings != null && settings.isShowing()) return;
+            settings = new SettingsDialog(this);
+            settings.setOnDismissListener(d -> {
+                settings = null;
+                hideSystemBars();
+            });
+            settings.show();
+            hideSystemBars();
+        });
+    }
+
+    private static boolean loose(InputEvent e, int sources) {
+        return (e.getSource() & sources) != 0 && !SDLControllerManager.isDeviceSDLJoystick(e.getDeviceId());
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent e) {
+        boolean pad = KeyEvent.isGamepadButton(e.getKeyCode())
+                || (e.getKeyCode() >= KeyEvent.KEYCODE_DPAD_UP && e.getKeyCode() <= KeyEvent.KEYCODE_DPAD_RIGHT);
+        if (pad && loose(e, InputDevice.SOURCE_GAMEPAD | InputDevice.SOURCE_JOYSTICK)) {
+            if (e.getRepeatCount() == 0) nativeLooseKey(e.getKeyCode(), e.getAction() == KeyEvent.ACTION_DOWN);
+            return true;
+        }
+        return super.dispatchKeyEvent(e);
+    }
+
+    @Override
+    public boolean dispatchGenericMotionEvent(MotionEvent e) {
+        if (loose(e, InputDevice.SOURCE_JOYSTICK) && e.getActionMasked() == MotionEvent.ACTION_MOVE) {
+            // the right stick on Z and RZ, the triggers on LTRIGGER and RTRIGGER or BRAKE and GAS, as Android has them
+            nativeLooseAxes(e.getAxisValue(MotionEvent.AXIS_X), e.getAxisValue(MotionEvent.AXIS_Y),
+                    e.getAxisValue(MotionEvent.AXIS_Z), e.getAxisValue(MotionEvent.AXIS_RZ),
+                    Math.max(e.getAxisValue(MotionEvent.AXIS_LTRIGGER), e.getAxisValue(MotionEvent.AXIS_BRAKE)),
+                    Math.max(e.getAxisValue(MotionEvent.AXIS_RTRIGGER), e.getAxisValue(MotionEvent.AXIS_GAS)),
+                    e.getAxisValue(MotionEvent.AXIS_HAT_X), e.getAxisValue(MotionEvent.AXIS_HAT_Y));
+            return true;
+        }
+        return super.dispatchGenericMotionEvent(e);
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
+        hideSystemBars();
         askForGame();
     }
+
+    @Override
+    protected void onPause() {
+        nativeLooseRelease();  // its ups go elsewhere while the game is not in front
+        super.onPause();
+    }
+
+    // the game fills the display, cutout and all: without this a phone with a notch or a camera keeps a black band
+    // on the side of it, and the status bar's space stays black above the picture
+    @SuppressWarnings("deprecation")
+    private void fillDisplay() {
+        Window window = getWindow();
+        WindowManager.LayoutParams lp = window.getAttributes();
+        if (Build.VERSION.SDK_INT >= 30) {
+            window.setDecorFitsSystemWindows(false);
+            lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
+        } else {
+            lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+        }
+        window.setAttributes(lp);
+        // A swipe brings the bars back for a moment; they are hidden again as soon as the system has laid the window
+        // out with them, so the game never keeps a strip of status bar or navigation bar over its picture.
+        if (Build.VERSION.SDK_INT >= 30) {
+            window.getDecorView().setOnApplyWindowInsetsListener((v, insets) -> {
+                if (insets.isVisible(WindowInsets.Type.statusBars())
+                        || insets.isVisible(WindowInsets.Type.navigationBars())) {
+                    v.removeCallbacks(hideBars);
+                    v.post(hideBars);
+                }
+                return insets;
+            });
+        }
+    }
+
+    private final Runnable hideBars = this::hideSystemBars;
 
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
@@ -71,6 +188,8 @@ public class DW5Activity extends SDLActivity {
 
     @SuppressWarnings("deprecation")
     private void hideSystemBars() {
+        // SDL clears this when the game leaves fullscreen; left on, the system keeps room for the status bar
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_FORCE_NOT_FULLSCREEN);
         if (Build.VERSION.SDK_INT < 30) {
             getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
                     | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
@@ -78,6 +197,7 @@ public class DW5Activity extends SDLActivity {
                     | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
             return;
         }
+        getWindow().setDecorFitsSystemWindows(false);
         WindowInsetsController c = getWindow().getInsetsController();
         if (c == null) return;
         c.hide(WindowInsets.Type.systemBars());

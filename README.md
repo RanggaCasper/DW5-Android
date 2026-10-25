@@ -37,15 +37,21 @@ The controls sit where the original pad has them:
 | left stick | walk, as the pad's |
 | drag on the right | turn the camera, easing out when the finger stops |
 | **X Y B A** | attack, charge, musou, jump, in the pad's diamond (X left, Y up, B right, A down) |
-| **D-pad** | the menus, four buttons apart so a thumb on one does not touch the next |
-| **START** / **BACK** | pause, map |
-| **LT** / **RT** | the triggers |
-| **L3** / **R3** | the stick clicks, under each thumb; both at once for a rage |
+| **D-pad** | the menus, four buttons apart so a thumb on one does not touch the next; it walks too, as on the pad |
+| **LT** | guard, held: the blow is turned aside, and the guard counter comes off it |
+| **RT** | the bow |
+| **L3** | the walk the D-pad gives, as the pad's left stick click does |
+| **R3** | musou rage, once an awakening seal is taken |
+| **START** / **BACK** | the battle's status screen, the bodyguard's orders |
 | **gear** | the settings panel, top middle |
 
-The buttons are drawn with the pad's own colours, from `native/ui/btn_*.rgba` (RGBA8888, 96 x 96, embedded by CMake:
+The buttons are drawn with the pad's own colours, from `native/ui/*.rgba` (RGBA8888, 96 x 96, embedded by CMake:
 the Android build has no image decoder). Their layout follows the Duke pad drawing xemu ships, `data/duke.svg`; that
 file is a colour-coded mask for xemu's own UI, so the glyphs here are drawn to match it rather than copied from it.
+Each icon is drawn from an `.svg` beside it: edit that, run `tools/ui_icons.sh` to write the `.rgba`, commit both.
+The panel's **Button style** draws the controls either as the pad's letters or as what they do in the game: a sword
+on X, a maul on Y, the musou burst on B and an arrow up on A, and a shield, a bow, a walk, a pause, a standard and the
+rage flame on the pills, in the order the original's □ △ ○ ✕ / L1 R1 L3 R3 / Start Select have them.
 
 A controller works as on the Xbox, with its rumble; while one is plugged in the on-screen controls are hidden, the
 gear staying for the panel. A keyboard works as port 1's pad, under a real pad if one is plugged in. The panel takes the D-pad and **A** as well as a finger, so it can
@@ -65,9 +71,13 @@ written to `settings.toml` at once.
 | **Anisotropic filtering** | the game's own, or 2X to 16X over it | GAME DEFAULT |
 | **Vertical sync** | FIFO, or immediate / mailbox tearing without it | ON |
 | **Frame skip** | AUTO: a frame left undrawn while the drawing is behind, the game still at its speed | AUTO |
-| **Aspect ratio** | the TV's shape, 16:9, or the whole screen | ORIGINAL |
+| **Aspect ratio** | the TV's shape, 16:9, the whole screen stretched, or the whole screen covered with the overflow cut | ORIGINAL |
 | **FPS counter** | the frame rate in the top left corner, amber under the cap | ON |
 | **HDR** | HDR10 when the display offers it; greyed when it does not | OFF |
+| **Button style** | the game's actions — sword, maul, musou, jump, shield, bow, rage — or the pad's letters | ACTIONS |
+| **Button size** | 50 to 150%, the layout's positions kept | 100% |
+| **Button opacity** | the on-screen controls, faint enough to see the game through | 100% |
+| **Move controls** | drag each control where the thumb wants it; Done and Reset in the middle of the screen | pad's layout |
 
 The frame rate cap (60) and the display mode are only in the file. 30 is not a cap the port offers: the title counts
 its timing at 60 and runs at half speed below it.

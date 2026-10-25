@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+  <!-- L3: the same walk the D-pad gives -->
+  <g fill="#fff">
+    <rect x="45" y="30" width="6" height="36" rx="3"/>
+    <rect x="30" y="45" width="36" height="6" rx="3"/>
+    <path d="M48 16 L58 32 L38 32 Z"/>
+    <path d="M48 80 L38 64 L58 64 Z"/>
+    <path d="M16 48 L32 38 L32 58 Z"/>
+    <path d="M80 48 L64 38 L64 58 Z"/>
+  </g>
+</svg>

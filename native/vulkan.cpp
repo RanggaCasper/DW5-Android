@@ -4767,7 +4767,8 @@ void VulkanBackend::BlitFrame(Target& t, Image* r, VkFormat rtv) {
     // the shape the console puts out, 16:9 in its widescreen mode: the title draws for that, not for the phone's
     // wider screen, so the picture is pillarboxed rather than stretched across it
     float tv = app::Widescreen() ? 16.0f / 9.0f : 4.0f / 3.0f;
-    // or the shape the panel's Aspect ratio asks for: 16:9, or FULL, the whole screen whatever rows are kept
+    // or the shape the panel's Aspect ratio asks for: 16:9, the whole screen stretched, or filled with what overflows
+    // cut off
     uint32_t shape = game::Opt().aspect;
     if (shape == 1) tv = 16.0f / 9.0f;
     // only the rows the title drew: the black it leaves under its picture is not shown, and the rows kept are as
@@ -4776,9 +4777,17 @@ void VulkanBackend::BlitFrame(Target& t, Image* r, VkFormat rtv) {
     float aspect = cut ? tv * float(t.gh) / float(shown_rows_) : tv;
     float w = float(bb_w_);
     float h = float(bb_h_);
-    if (shape >= 2) aspect = w / std::max(h, 1.0f);
-    float vw = std::min(w, h * aspect);
-    float vh = vw / aspect;
+    float vw, vh;
+    if (shape >= 3) {
+        // FILL: the picture keeps the TV's shape and is zoomed until the screen is covered, so a screen wider than the
+        // TV loses rows at the top and bottom rather than gaining columns at the sides
+        vw = std::max(w, h * aspect);
+        vh = vw / aspect;
+    } else {
+        if (shape >= 2) aspect = w / std::max(h, 1.0f);
+        vw = std::min(w, h * aspect);
+        vh = vw / aspect;
+    }
     float uv[4] = {0, 0, 1, cut ? float(shown_rows_) / float(t.gh) : 1.0f};
     SetViewport((w - vw) / 2, (h - vh) / 2, vw, vh);
     SetScissor({0, 0, int32_t(bb_w_), int32_t(bb_h_)});
