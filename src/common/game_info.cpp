@@ -57,8 +57,6 @@ const app::GameInfo app::kGame = {
                 {"aspect", nullptr, &game::Opt().aspect},
                 {"controls_opacity", nullptr, &game::Opt().controls_opacity},
                 {"controls_scale", nullptr, &game::Opt().controls_scale},
-                {"controls_style", nullptr, &game::Opt().controls_style},
-                {"controls_art", nullptr, &game::Opt().controls_art},
                 {"hdr_output", &game::Opt().hdr_output, nullptr}},
     .load = LoadControls,                   // reads more from the settings file's toml::table
     .save = SaveControls,                   // writes more into it

@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
-  <!-- RT: the bow, held across the screen -->
-  <g fill="none" stroke="#fff" stroke-linecap="round">
-    <path d="M34 18 C56 30 56 66 34 78" stroke-width="6"/>
-    <path d="M34 18 L34 78" stroke-width="3"/>
-    <path d="M22 48 L64 48" stroke-width="6"/>
-  </g>
-  <path fill="#fff" d="M74 48 L58 40 L58 56 Z"/>
-</svg>

@@ -87,46 +87,8 @@ set(IMGUI_SOURCES ${imgui_SOURCE_DIR}/imgui.cpp ${imgui_SOURCE_DIR}/imgui_draw.c
 set_source_files_properties(${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp PROPERTIES
     COMPILE_DEFINITIONS IMGUI_IMPL_VULKAN_NO_PROTOTYPES)
 
-# the touch controls' icons, native/ui/*.rgba, into a source of its own: the Android build has no image decoder,
-# and these are small enough to carry as bytes. The .svg each one is drawn from is beside it (tools/ui_icons.sh).
-set(UI_ICONS "")
-set(UI_ICON_DECLS "")
-foreach(name A B X Y)
-    file(READ ${NATIVE}/ui/btn_${name}.rgba ICON_HEX HEX)
-    string(REGEX REPLACE "(..)" "\\\\x\\1" ICON_HEX "${ICON_HEX}")
-    string(APPEND UI_ICONS "extern const char kBtn${name}[] = \"${ICON_HEX}\";\n")
-    string(APPEND UI_ICON_DECLS "extern const char kBtn${name}[];\n")
-endforeach()
-# what the pad's buttons do in the game, for the panel's other button style: the file's name, the symbol's
-foreach(pair Light:light Heavy:heavy Musou:musou Jump:jump Guard:guard Shoot:shoot Move:move Pause:pause
-             Orders:orders Rage:rage Map:map Back:back)
-    string(REPLACE ":" ";" pair "${pair}")
-    list(GET pair 0 symbol)
-    list(GET pair 1 file)
-    file(READ ${NATIVE}/ui/${file}.rgba ICON_HEX HEX)
-    string(REGEX REPLACE "(..)" "\\\\x\\1" ICON_HEX "${ICON_HEX}")
-    string(APPEND UI_ICONS "extern const char kAct${symbol}[] = \"${ICON_HEX}\";\n")
-    string(APPEND UI_ICON_DECLS "extern const char kAct${symbol}[];\n")
-endforeach()
-file(CONFIGURE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ui_icons.cpp CONTENT
-"// written by CMake from native/ui/*.rgba: RGBA8888, 96 x 96 each
-#include <cstdint>
-
-namespace ui_icons {
-${UI_ICONS}
-}  // namespace ui_icons
-")
-file(CONFIGURE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ui_icons.h CONTENT
-"// written by CMake from native/ui/*.rgba: RGBA8888, 96 x 96 each
-#pragma once
-
-namespace ui_icons {
-${UI_ICON_DECLS}constexpr int kIconSize = 96;
-}  // namespace ui_icons
-")
-
 add_library(main SHARED ${RUNTIME_SOURCES} ${GAME_HOST_SOURCES} ${ANDROID_SOURCES} ${GEN_SOURCES} ${IMGUI_SOURCES}
-            ${CMAKE_CURRENT_BINARY_DIR}/image_sha1.cpp ${CMAKE_CURRENT_BINARY_DIR}/ui_icons.cpp)
+            ${CMAKE_CURRENT_BINARY_DIR}/image_sha1.cpp)
 target_include_directories(main PRIVATE ${NATIVE}/compat ${SDK}/harness/compat ${NATIVE} ${GAME} ${SDK}/runtime ${GEN}
                            ${CMAKE_CURRENT_BINARY_DIR} ${glslang_SOURCE_DIR})
 target_include_directories(main SYSTEM PRIVATE ${imgui_SOURCE_DIR} ${vma_SOURCE_DIR}/include)

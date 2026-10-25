@@ -1,6 +1,6 @@
 // The on-screen controls, laid out as the original Xbox pad's: the left stick walks, the four face buttons are the
-// pad's, and a drag on the right turns the camera. Their art is the pad's own colours, from native/ui. Touches come
-// from SDL's finger events in window coordinates; what they leave is overlaid on the pad the keyboard left
+// pad's own, in its colours, and a drag on the right turns the camera. Touches come from SDL's finger events in
+// window coordinates; what they leave is overlaid on the pad the keyboard left
 // (src/common/keyboard.cpp), so the game reads one report as on the console.
 #include <SDL3/SDL.h>
 #include <toml++/toml.hpp>
@@ -21,8 +21,6 @@
 #include "core/log.h"
 #include "host.h"
 #include "loose.h"
-#include "ui_icons.h"
-#include "vk_ui.h"
 
 namespace touch {
 
@@ -31,7 +29,7 @@ namespace {
 // what a finger is doing; the gear is past the pad's buttons
 enum Role : int { kNone = -1, kStick = 0, kCamera = 1, kButton = 2 };
 // the pad's analog buttons, in input::Pad::analog order
-enum Analog : int { kA = 0, kB = 1, kX = 2, kY = 3, kWhite = 4, kBlack = 5, kLeftTrigger = 6, kRightTrigger = 7 };
+enum Analog : int { kA = 0, kB = 1, kX = 2, kY = 3, kBlack = 4, kWhite = 5, kLeftTrigger = 6, kRightTrigger = 7 };
 enum Bit : uint16_t { kUp = 1 << 0, kDown = 1 << 1, kLeft = 1 << 2, kRight = 1 << 3, kStart = 1 << 4, kBack = 1 << 5,
                        kLeftThumb = 1 << 6, kRightThumb = 1 << 7 };
 // the on-screen buttons, in the order the layout and the art have them
@@ -240,38 +238,6 @@ void StickTo(float x, float y, const Layout& l) {
     g_ly = std::clamp(-dy, -1.0f, 1.0f);  // screen y down, the stick's up
 }
 
-// the buttons' art, made into textures the first frame they are drawn: the pad's letters, or what each control does in
-// the game, the panel's button style choosing which. The pills have no letters worth drawing in the game's style.
-const char* const kArtPad[4] = {ui_icons::kBtnA, ui_icons::kBtnB, ui_icons::kBtnX, ui_icons::kBtnY};
-// A jump, B musou, X attack, Y charge: the pad's diamond read the way the game's manual reads it, not the order the
-// buttons are numbered in
-const char* const kArtGame[4] = {ui_icons::kActJump, ui_icons::kActMusou, ui_icons::kActLight, ui_icons::kActHeavy};
-const char* const kPillArt[kPillCount] = {ui_icons::kActBack,  ui_icons::kActPause, ui_icons::kActGuard, ui_icons::kActShoot,
-                                          ui_icons::kActMove,  ui_icons::kActRage,  ui_icons::kActMap,   ui_icons::kActOrders};
-// Both styles are made once and kept: a style change then only picks which set is drawn, where making the new set on
-// the change left the old textures and their descriptor sets behind every time
-ImTextureID g_tex_pad[4];
-ImTextureID g_tex_game[4];
-ImTextureID g_pill_tex[kPillCount];
-bool g_art_made;
-
-int ArtStyle() { return int(std::min<uint32_t>(game::Opt().controls_style, 1)); }
-// the panel's BUTTON ART: off draws letters and shapes and makes no texture at all, which is what the controls were
-// before the icons and what a device that struggles with them can fall back to
-bool UseArt() { return game::Opt().controls_art != 0; }
-
-ImTextureID Icon(const char* bytes) {
-    return vkui::Texture(reinterpret_cast<const uint8_t*>(bytes), ui_icons::kIconSize, ui_icons::kIconSize);
-}
-
-void EnsureArt() {
-    if (g_art_made || !UseArt()) return;
-    g_art_made = true;  // one attempt: a texture that will not be made is not tried again every frame
-    for (int b = 0; b < 4; b++) g_tex_pad[b] = Icon(kArtPad[b]);
-    for (int b = 0; b < 4; b++) g_tex_game[b] = Icon(kArtGame[b]);
-    for (int i = 0; i < kPillCount; i++) g_pill_tex[i] = kPillArt[i] ? Icon(kPillArt[i]) : nullptr;
-}
-
 }  // namespace
 
 void Init() { LOGI("touch: on-screen controls"); }
@@ -341,9 +307,12 @@ void Event(const SDL_Event& e) {
                 if (t.role == kStick) {
                     StickTo(x, y, lay);
                 } else if (t.role == kCamera) {
-                    // a drag turns the view: the deflection the stick would give, eased back in Apply
-                    g_rx = std::clamp(g_rx.load() + dx / (lay.s * 0.12f), -1.0f, 1.0f);
-                    g_ry = std::clamp(g_ry.load() - dy / (lay.s * 0.12f), -1.0f, 1.0f);
+                    // a drag turns the view: each pixel of it adds to the stick's deflection, which Apply eases back,
+                    // so the turn follows the swipe's speed. A twenty-fifth of the screen's short side is a full stick,
+                    // and with the easing the deflection settles at five times one event's worth: an ordinary swipe is
+                    // most of the stick, where the tenth of that it was before sat under the game's deadzone
+                    g_rx = std::clamp(g_rx.load() + dx / (lay.s * 0.04f), -1.0f, 1.0f);
+                    g_ry = std::clamp(g_ry.load() - dy / (lay.s * 0.04f), -1.0f, 1.0f);
                 }
                 // an arrow stays the one first touched, wherever the thumb slides: no direction changes by itself
                 break;
@@ -393,9 +362,10 @@ void Apply(input::Pad& pad) {
     if (rx || ry) {
         pad.rx = int16_t(std::lround(std::clamp(rx, -1.0f, 1.0f) * 32767.0f));
         pad.ry = int16_t(std::lround(std::clamp(ry, -1.0f, 1.0f) * 32767.0f));
-        // the drag's turn eases out over the next few polls, as a stick held for a moment would
-        g_rx = std::fabs(rx) < 0.02f ? 0.0f : rx * 0.55f;
-        g_ry = std::fabs(ry) < 0.02f ? 0.0f : ry * 0.55f;
+        // the drag's turn eases out over the next few polls, as a stick held for a moment would: a slow ease keeps
+        // the deflection up between the finger's motion events, where a fast one dropped it under the deadzone
+        g_rx = std::fabs(rx) < 0.02f ? 0.0f : rx * 0.8f;
+        g_ry = std::fabs(ry) < 0.02f ? 0.0f : ry * 0.8f;
     }
     // a controller the phone took over comes in over the top of both
     loose::Merge(pad);
@@ -430,7 +400,6 @@ void DrawEditor(const Layout& l, ImDrawList* dl) {
 void Draw() {
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     if (!dl) return;
-    EnsureArt();
     ImGuiIO& io = ImGui::GetIO();
     Layout l = Make(io.DisplaySize.x, io.DisplaySize.y);
     // the panel's opacity: everything the controls are drawn with, the gear too, is its own alpha times this
@@ -484,21 +453,16 @@ void Draw() {
     dl->AddCircleFilled(ImVec2(l.stick[0] + g_lx * l.stick_r * 0.72f, l.stick[1] - g_ly * l.stick_r * 0.72f),
                         l.stick_r * 0.36f, IM_COL32(255, 255, 255, at(70)), 32);
 
-    // the four face buttons, the pad's own art
-    const ImTextureID* face = ArtStyle() ? g_tex_game : g_tex_pad;
+    // the four face buttons, the pad's own: A green, B red, X blue, Y yellow, each letter in white
+    static const int kFace[4][3] = {{106, 168, 79}, {198, 62, 48}, {44, 106, 176}, {222, 176, 60}};
     static const char* const kLetters[4] = {"A", "B", "X", "Y"};
     for (int b = 0; b < 4; b++) {
         ImVec2 c(l.btn[b][0], l.btn[b][1]);
-        ImVec2 a(c.x - l.btn_r, c.y - l.btn_r), z(c.x + l.btn_r, c.y + l.btn_r);
-        if (UseArt() && face[b]) {
-            dl->AddImage(face[b], a, z, ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, at(255)));
-            continue;
-        }
-        dl->AddCircleFilled(c, l.btn_r, fill, 32);
+        dl->AddCircleFilled(c, l.btn_r, IM_COL32(kFace[b][0], kFace[b][1], kFace[b][2], at(200)), 32);
         dl->AddCircle(c, l.btn_r, line, 32, 2.0f);
         float size = l.btn_r * 0.95f;
         ImVec2 t = font->CalcTextSizeA(size, FLT_MAX, 0, kLetters[b]);
-        dl->AddText(font, size, ImVec2(c.x - t.x / 2, c.y - t.y / 2), label, kLetters[b]);
+        dl->AddText(font, size, ImVec2(c.x - t.x / 2, c.y - t.y / 2), IM_COL32(255, 255, 255, at(240)), kLetters[b]);
     }
 
     // the arrows: four round buttons apart, each with its arrow, lit while held
@@ -533,13 +497,6 @@ void Draw() {
                           IM_COL32(20, 20, 20, at(150)), l.pill_h / 2);
         dl->AddRect(ImVec2(c.x - l.pill_w / 2, c.y - l.pill_h / 2), ImVec2(c.x + l.pill_w / 2, c.y + l.pill_h / 2),
                     line, l.pill_h / 2, 0, 1.5f);
-        // in the game's style the pill shows what it does, the letters standing for nothing there
-        if (UseArt() && ArtStyle() && g_pill_tex[i]) {
-            float s = l.pill_h * 0.95f;
-            dl->AddImage(g_pill_tex[i], ImVec2(c.x - s / 2, c.y - s / 2), ImVec2(c.x + s / 2, c.y + s / 2), ImVec2(0, 0),
-                         ImVec2(1, 1), IM_COL32(255, 255, 255, at(235)));
-            continue;
-        }
         float size = l.pill_h * 0.46f;
         ImVec2 t = font->CalcTextSizeA(size, FLT_MAX, 0, p.text);
         dl->AddText(font, size, ImVec2(c.x - t.x / 2, c.y - t.y / 2), label, p.text);

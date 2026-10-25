@@ -68,14 +68,16 @@ PFN_vkWaitSemaphoresKHR p_vkWaitSemaphores = nullptr;
 #include "host.h"
 #include "kernel/kernel.h"
 #include "vk_shader.h"
-#include "vk_ui.h"
 
 namespace gpu {
 
 namespace {
 
 constexpr int kFrames = 3;
-constexpr uint64_t kUploadSize = 64ull << 20;
+// the vertex, index and constant data of a frame; a phone's frame is a few megabytes, and the ring is pinned memory
+constexpr uint64_t kUploadSize = 32ull << 20;
+// pipelines made before the cache is written to disk again
+constexpr uint32_t kPipeCacheSave = 64;
 // b0 and b1 are dynamic uniform buffers of this range, bound at each draw's offsets: the larger of the vertex
 // constants and DrawConstants, every constant upload reserving all of it
 constexpr uint64_t kUboRange = (std::max<uint64_t>(sizeof(gpu::State::vsc), sizeof(gpu::DrawConstants)) + 255) & ~255ull;
@@ -790,14 +792,23 @@ bool LatchCpuWrite(Target& t) {
 
 uint32_t Ms(const Target& t) { return t.res->samples; }
 
+// A guest edge as a host pixel: the low edge rounds down and the high edge up, so two rects that meet in guest space
+// meet in host space too, and no pixel between them is left out. Truncating both edges loses the last row and column
+// of every rect at a fractional render scale, which shows as a line or a cut where two rects join
+int32_t HostEdge(int32_t v, float sc, uint32_t limit, bool high) {
+    double h = double(v) * double(sc);
+    int32_t i = int32_t(high ? std::ceil(h) : std::floor(h));
+    return std::clamp<int32_t>(i, 0, int32_t(limit));
+}
+
 // the viewport in target pixels
 Rect ViewRect(const Viewport& v, const Target& t) {
-    float sc = float(t.w) / t.gw;
+    float sc = float(t.w) / float(t.gw);
     Rect r;
-    r.left = std::clamp<int32_t>(int32_t(v.x * sc), 0, t.w);
-    r.top = std::clamp<int32_t>(int32_t(v.y * sc), 0, t.h);
-    r.right = std::clamp<int32_t>(int32_t((v.x + v.w) * sc), 0, t.w);
-    r.bottom = std::clamp<int32_t>(int32_t((v.y + v.h) * sc), 0, t.h);
+    r.left = HostEdge(int32_t(v.x), sc, t.w, false);
+    r.top = HostEdge(int32_t(v.y), sc, t.h, false);
+    r.right = HostEdge(int32_t(v.x + v.w), sc, t.w, true);
+    r.bottom = HostEdge(int32_t(v.y + v.h), sc, t.h, true);
     return r;
 }
 
@@ -996,7 +1007,8 @@ private:
     Frame& CurrentFrame() { return frames_[frame_ % kFrames]; }
     // recording: layouts, the attachments drawn to, the pipeline and what it reads
     void Transition(Image& img, VkImageLayout want);
-    void SetAttachments(Image* color, Image* depth);
+    // load: LOAD keeps what the target held, DONT_CARE for a pass that covers every pixel of it
+    void SetAttachments(Image* color, Image* depth, VkAttachmentLoadOp load = VK_ATTACHMENT_LOAD_OP_LOAD);
     void EnsureRendering();
     void EndRendering();
     void HostReadBarrier();
@@ -1018,7 +1030,8 @@ private:
     void PollFences();
     void ResetPools(Frame& f);
     VkDescriptorSet AllocateSet();
-    VkRenderPass CompatiblePass(VkFormat color, VkFormat depth, uint32_t samples);
+    VkRenderPass CompatiblePass(VkFormat color, VkFormat depth, uint32_t samples,
+                                VkAttachmentLoadOp load = VK_ATTACHMENT_LOAD_OP_LOAD);
     VkFramebuffer Framebuffer(Image* color, Image* depth, uint32_t w, uint32_t h);
     void DropFramebuffers(VkImageView v);
     void CompletePipeline(PipelineParts& p);
@@ -1042,9 +1055,6 @@ private:
     // UploadTarget, then its step
     void UploadTarget(Target& t, const Surface& s);
     ImageRef CreatePixelTexture(const std::vector<uint8_t>& px, uint32_t pitch, uint32_t w, uint32_t h);
-public:
-    // RGBA pixels as an ImGui texture, for the touch controls' buttons
-    ImTextureID AddUiTexture(const uint8_t* rgba, uint32_t w, uint32_t h);
 
 private:
     void Blit(Image* src, const float uvrect[4], const BlitOptions& o);
@@ -1131,6 +1141,9 @@ private:
     bool CreateInstance();
     bool PickDevice();
     bool CreateDevice();
+    // the pipeline cache on disk, keyed to the driver: a phone without one recompiles every pipeline on each launch
+    void LoadPipelineCache();
+    void SavePipelineCache();
     bool CreateLayouts();
     void CreateFrames();
     void CreateDefaults();
@@ -1161,6 +1174,14 @@ private:
     ImageRef CreateLookupTexture(const SmaaLookup& l);
     bool EnsureSmaaTargets(VkFormat fmt, uint32_t w, uint32_t h);
     bool DrawSmaaPasses(Image* src, VkFormat fmt, uint32_t w, uint32_t h, const char* hlsl);
+    // the picture's place in the back buffer, and the share of the target's rows it shows
+    struct FramePlace {
+        float x = 0, y = 0, w = 0, h = 0;
+        float rows = 1;
+    };
+    FramePlace PlaceFrame(const Target& t);
+    // black outside the picture: the bars alone, so the whole surface is not written every frame
+    void ClearBars(Image& bb, const FramePlace& p, const VkClearColorValue& colour);
     void DrawSdrFrame(Target* t, Image* r, Image* bb);
     bool EnsureOutTargets();
     void DrawHdrFrame(Target* t, Image* r, Image* bb);
@@ -1221,6 +1242,9 @@ private:
     VkPhysicalDevice phys_ = VK_NULL_HANDLE;
     VkPhysicalDeviceProperties props_{};
     VkDevice dev_ = VK_NULL_HANDLE;
+    VkPipelineCache pipe_cache_ = VK_NULL_HANDLE;
+    std::filesystem::path pipe_cache_file_;
+    uint32_t pipe_new_ = 0;  // pipelines made since the cache was last written
     uint32_t family_ = 0;
     VkQueue queue_ = VK_NULL_HANDLE;
     VmaAllocator vma_ = nullptr;
@@ -1271,6 +1295,7 @@ private:
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkDescriptorPool ui_pool_ = VK_NULL_HANDLE;
     Image* att_color_ = nullptr;  // the attachments the next draw renders to
+    VkAttachmentLoadOp att_load_ = VK_ATTACHMENT_LOAD_OP_LOAD;
     Image* att_depth_ = nullptr;
     bool rendering_ = false;      // a vkCmdBeginRendering with them is open
     // What the command buffer has bound and set, so a draw sets only what changed: Mali's driver works over the
@@ -1300,7 +1325,6 @@ private:
     std::unordered_map<uint64_t, Tex> textures_;  // by data address, a P8 texture's with its palette's above
     std::unordered_map<uint64_t, VkPipeline> blit_psos_;
     ImageRef dummy_[3];  // what a stage without a texture reads: 2D, 3D, cube
-    std::vector<ImageRef> ui_images_;  // the touch controls' art, made once and kept
     // one frame capture: every draw in a text file, each target as the frame leaves it, the textures it read
     FILE* cap_ = nullptr;
     std::filesystem::path cap_dir_;
@@ -1374,7 +1398,10 @@ private:
 
 
 VulkanBackend::~VulkanBackend() {
-    if (dev_) vkDeviceWaitIdle(dev_);
+    if (!dev_) return;
+    vkDeviceWaitIdle(dev_);
+    SavePipelineCache();
+    if (pipe_cache_) vkDestroyPipelineCache(dev_, pipe_cache_, nullptr);
 }
 
 bool VulkanBackend::Init(uint32_t width, uint32_t height) {
@@ -1629,6 +1656,7 @@ bool VulkanBackend::CreateDevice() {
         return false;
     }
     vkGetDeviceQueue(dev_, family_, 0, &queue_);
+    LoadPipelineCache();
     bool v13 = props_.apiVersion >= VK_API_VERSION_1_3;
     auto load = [&](const char* core, const char* ext) { return vkGetDeviceProcAddr(dev_, v13 ? core : ext); };
     if (dynamic_rendering_) {
@@ -1671,6 +1699,80 @@ bool VulkanBackend::CreateDevice() {
     // distance, as on Mali and in Black-Android: the path the port is seen to draw right on
     vkshader::Init(host::FilesDir() / "shadercache", false);
     return true;
+}
+
+namespace {
+
+// the cache file's header: a cache another driver wrote is not one this one can read
+struct PipeCacheHeader {
+    char tag[8];
+    uint32_t version;
+    uint32_t vendor;
+    uint32_t device;
+    uint32_t driver;
+    uint32_t api;
+    uint32_t uuid[VK_UUID_SIZE / 4];
+};
+
+PipeCacheHeader PipeHeader(const VkPhysicalDeviceProperties& p) {
+    PipeCacheHeader h{};
+    std::memcpy(h.tag, "DW5VK", 5);
+    h.version = 1;
+    h.vendor = p.vendorID;
+    h.device = p.deviceID;
+    h.driver = p.driverVersion;
+    h.api = p.apiVersion;
+    std::memcpy(h.uuid, p.pipelineCacheUUID, VK_UUID_SIZE);
+    return h;
+}
+
+}  // namespace
+
+void VulkanBackend::LoadPipelineCache() {
+    PipeCacheHeader h = PipeHeader(props_);
+    pipe_cache_file_ = host::FilesDir() / "pipelinecache" / "cache.bin";
+    std::vector<uint8_t> data;
+    if (FILE* f = std::fopen(pipe_cache_file_.c_str(), "rb")) {
+        PipeCacheHeader file_h{};
+        if (std::fread(&file_h, sizeof(file_h), 1, f) == 1 && std::memcmp(&file_h, &h, sizeof(h)) == 0 &&
+            std::fseek(f, 0, SEEK_END) == 0) {
+            long n = std::ftell(f);
+            if (n > long(sizeof(h))) {
+                data.resize(size_t(n) - sizeof(h));
+                std::fseek(f, long(sizeof(h)), SEEK_SET);
+                if (std::fread(data.data(), 1, data.size(), f) != data.size()) data.clear();
+            }
+        }
+        std::fclose(f);
+    }
+    VkPipelineCacheCreateInfo ci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    ci.initialDataSize = data.size();
+    ci.pInitialData = data.data();
+    if (vkCreatePipelineCache(dev_, &ci, nullptr, &pipe_cache_) != VK_SUCCESS) {
+        pipe_cache_ = VK_NULL_HANDLE;
+        LOGW("vulkan: no pipeline cache");
+        return;
+    }
+    LOGI("vulkan: pipeline cache %zu bytes from disk", data.size());
+}
+
+void VulkanBackend::SavePipelineCache() {
+    if (!pipe_cache_) return;
+    size_t n = 0;
+    if (vkGetPipelineCacheData(dev_, pipe_cache_, &n, nullptr) != VK_SUCCESS || n == 0) return;
+    std::vector<uint8_t> data(n);
+    if (vkGetPipelineCacheData(dev_, pipe_cache_, &n, data.data()) != VK_SUCCESS || n == 0) return;
+    std::error_code ec;
+    std::filesystem::create_directories(pipe_cache_file_.parent_path(), ec);
+    if (ec) return;
+    PipeCacheHeader h = PipeHeader(props_);
+    std::filesystem::path tmp = pipe_cache_file_;
+    tmp += ".tmp";
+    FILE* f = std::fopen(tmp.c_str(), "wb");
+    if (!f) return;
+    bool ok = std::fwrite(&h, sizeof(h), 1, f) == 1 && std::fwrite(data.data(), 1, n, f) == n;
+    if (std::fclose(f) != 0) ok = false;
+    if (ok) std::filesystem::rename(tmp, pipe_cache_file_, ec);
 }
 
 // one push descriptor set for every pipeline: b0 b1 as uniform buffers, t0 to t3 sampled images, s0 to s3 samplers
@@ -1914,9 +2016,10 @@ void VulkanBackend::HostReadBarrier() {
 }
 
 // the attachments of the next draws; rendering to them starts at the first that needs it
-void VulkanBackend::SetAttachments(Image* color, Image* depth) {
-    if (color == att_color_ && depth == att_depth_) return;
+void VulkanBackend::SetAttachments(Image* color, Image* depth, VkAttachmentLoadOp load) {
+    if (color == att_color_ && depth == att_depth_ && load == att_load_) return;
     EndRendering();
+    att_load_ = load;
     att_color_ = color;
     att_depth_ = depth;
 }
@@ -1944,7 +2047,7 @@ void VulkanBackend::EnsureRendering() {
     if (att_color_) {
         ca.imageView = att_color_->attach;
         ca.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        ca.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        ca.loadOp = att_load_;
         ca.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         ri.colorAttachmentCount = 1;
         ri.pColorAttachments = &ca;
@@ -1969,7 +2072,7 @@ void VulkanBackend::EnsureRendering() {
         VkRenderPassBeginInfo bi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
         bi.renderPass = CompatiblePass(att_color_ ? att_color_->format : VK_FORMAT_UNDEFINED,
                                        att_depth_ ? att_depth_->format : VK_FORMAT_UNDEFINED,
-                                       (att_color_ ? att_color_ : att_depth_)->samples);
+                                       (att_color_ ? att_color_ : att_depth_)->samples, att_load_);
         bi.framebuffer = Framebuffer(att_color_, att_depth_, w, h);
         bi.renderArea = ri.renderArea;
         vkCmdBeginRenderPass(cl_, &bi, VK_SUBPASS_CONTENTS_INLINE);
@@ -1986,8 +2089,10 @@ void VulkanBackend::EndRendering() {
 
 // without dynamic rendering: the attachments loaded and stored and left in their layouts, as EnsureRendering's
 // dynamic rendering does; a pipeline needs only a compatible pass, formats and samples
-VkRenderPass VulkanBackend::CompatiblePass(VkFormat color, VkFormat depth, uint32_t samples) {
-    uint64_t key = uint64_t(color) | uint64_t(depth) << 24 | uint64_t(samples) << 48;
+VkRenderPass VulkanBackend::CompatiblePass(VkFormat color, VkFormat depth, uint32_t samples,
+                                           VkAttachmentLoadOp load) {
+    uint64_t key = uint64_t(color) | uint64_t(depth) << 24 | uint64_t(samples) << 40 |
+                   uint64_t(load == VK_ATTACHMENT_LOAD_OP_DONT_CARE) << 60;
     if (auto it = passes_.find(key); it != passes_.end()) return it->second;
     VkAttachmentDescription at[2] = {};
     VkAttachmentReference cr{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
@@ -1997,7 +2102,7 @@ VkRenderPass VulkanBackend::CompatiblePass(VkFormat color, VkFormat depth, uint3
     auto count = VkSampleCountFlagBits(std::max(samples, 1u));
     uint32_t n = 0;
     if (color != VK_FORMAT_UNDEFINED) {
-        at[n] = {0, color, count, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_STORE,
+        at[n] = {0, color, count, load, VK_ATTACHMENT_STORE_OP_STORE,
                  VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_STORE_OP_DONT_CARE,
                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
         cr.attachment = n++;
@@ -2629,29 +2734,6 @@ ImageRef VulkanBackend::CreatePixelTexture(const std::vector<uint8_t>& px, uint3
 }
 
 // RGBA pixels as an ImGui texture: copied into a BGRA image left readable, the sampler made once, the image kept
-ImTextureID VulkanBackend::AddUiTexture(const uint8_t* rgba, uint32_t w, uint32_t h) {
-    std::vector<uint8_t> bgra(size_t(w) * h * 4);
-    for (size_t i = 0; i < bgra.size(); i += 4) {
-        bgra[i] = rgba[i + 2];
-        bgra[i + 1] = rgba[i + 1];
-        bgra[i + 2] = rgba[i];
-        bgra[i + 3] = rgba[i + 3];
-    }
-    ImageRef tex = CreatePixelTexture(bgra, w * 4, w, h);
-    if (!tex) return ImTextureID();
-    VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-    si.magFilter = VK_FILTER_LINEAR;
-    si.minFilter = VK_FILTER_LINEAR;
-    si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    si.maxLod = 0.25f;
-    VkSampler sampler = EnsureSampler(si, nullptr);
-    ImTextureID id = ImGui_ImplVulkan_AddTexture(sampler, tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    ui_images_.push_back(std::move(tex));
-    return id;
-}
-
 // CPU pixels of a color surface into its host target, scaled
 void VulkanBackend::UploadTarget(Target& t, const Surface& s) {
     g_perf.rtups++;
@@ -2875,7 +2957,7 @@ VkPipeline VulkanBackend::CreatePassPipeline(const PassPipe& p) {
     VkPipeline pso = VK_NULL_HANDLE;
     g_perf.psos++;
     CompletePipeline(parts);
-    VkResult r = vkCreateGraphicsPipelines(dev_, VK_NULL_HANDLE, 1, &parts.info, nullptr, &pso);
+    VkResult r = vkCreateGraphicsPipelines(dev_, pipe_cache_, 1, &parts.info, nullptr, &pso);
     if (r != VK_SUCCESS) {
         LOGE("vulkan: pass pipeline %s/%s creation failed (%d)", p.vs_entry, p.ps_entry, int(r));
         return VK_NULL_HANDLE;
@@ -3075,8 +3157,12 @@ VkPipeline VulkanBackend::EnsurePipeline(const PsoKey& k, VkShaderModule vs, VkS
     VkPipeline pso = VK_NULL_HANDLE;
     g_perf.psos++;
     CompletePipeline(p);
-    if (vkCreateGraphicsPipelines(dev_, VK_NULL_HANDLE, 1, &p.info, nullptr, &pso) != VK_SUCCESS) {
+    if (vkCreateGraphicsPipelines(dev_, pipe_cache_, 1, &p.info, nullptr, &pso) != VK_SUCCESS) {
         LOGE("vulkan: pipeline creation failed");
+    } else if (++pipe_new_ >= kPipeCacheSave) {
+        // the cache on disk is only as good as the last write: Android may end the process without a destructor
+        pipe_new_ = 0;
+        SavePipelineCache();
     }
     psos_[h] = pso;
     return pso;
@@ -3958,22 +4044,21 @@ void VulkanBackend::SetTextureViewsAndSamplers(const State& s, const Assembled& 
 
 // viewport covers the target, the guest viewport is in the shader; scissor clips to it
 void VulkanBackend::SetViewportScissor(const State& s, uint32_t gw) {
-    float W = float(bound_rt_ ? bound_rt_->w : bound_ds_->w);
-    float H = float(bound_rt_ ? bound_rt_->h : bound_ds_->h);
-    SetViewport(0, 0, W, H);
-    float sc = W / gw;
-    int32_t x0 = int32_t(s.viewport.x * sc);
-    int32_t y0 = int32_t(s.viewport.y * sc);
-    int32_t x1 = int32_t((s.viewport.x + s.viewport.w) * sc);
-    int32_t y1 = int32_t((s.viewport.y + s.viewport.h) * sc);
+    uint32_t W = bound_rt_ ? bound_rt_->w : bound_ds_->w;
+    uint32_t H = bound_rt_ ? bound_rt_->h : bound_ds_->h;
+    SetViewport(0, 0, float(W), float(H));
+    float sc = float(W) / float(gw);
+    int32_t x0 = HostEdge(int32_t(s.viewport.x), sc, W, false);
+    int32_t y0 = HostEdge(int32_t(s.viewport.y), sc, H, false);
+    int32_t x1 = HostEdge(int32_t(s.viewport.x + s.viewport.w), sc, W, true);
+    int32_t y1 = HostEdge(int32_t(s.viewport.y + s.viewport.h), sc, H, true);
     if (s.scissor_count) {
-        x0 = std::max(x0, int32_t(s.scissors[0] * sc));
-        y0 = std::max(y0, int32_t(s.scissors[1] * sc));
-        x1 = std::min(x1, int32_t(s.scissors[2] * sc));
-        y1 = std::min(y1, int32_t(s.scissors[3] * sc));
+        x0 = std::max(x0, HostEdge(int32_t(s.scissors[0]), sc, W, false));
+        y0 = std::max(y0, HostEdge(int32_t(s.scissors[1]), sc, H, false));
+        x1 = std::min(x1, HostEdge(int32_t(s.scissors[2]), sc, W, true));
+        y1 = std::min(y1, HostEdge(int32_t(s.scissors[3]), sc, H, true));
     }
-    SetScissor({std::clamp<int32_t>(x0, 0, int32_t(W)), std::clamp<int32_t>(y0, 0, int32_t(H)),
-                std::clamp<int32_t>(x1, 0, int32_t(W)), std::clamp<int32_t>(y1, 0, int32_t(H))});
+    SetScissor({x0, y0, x1, y1});
 }
 
 void VulkanBackend::SetBlendFactorStencilRef(const State& s, const PsoKey& k) {
@@ -4092,11 +4177,11 @@ void VulkanBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t
 
 // a guest rect scaled to the target and clamped to it
 VkClearRect ScaledRect(const Target& t, int x0, int y0, int x1, int y1) {
-    float sc = float(t.w) / t.gw;
-    int32_t l = std::clamp<int32_t>(int32_t(x0 * sc), 0, int32_t(t.w));
-    int32_t tp = std::clamp<int32_t>(int32_t(y0 * sc), 0, int32_t(t.h));
-    int32_t r = std::clamp<int32_t>(int32_t(x1 * sc), 0, int32_t(t.w));
-    int32_t b = std::clamp<int32_t>(int32_t(y1 * sc), 0, int32_t(t.h));
+    float sc = float(t.w) / float(t.gw);
+    int32_t l = HostEdge(x0, sc, t.w, false);
+    int32_t tp = HostEdge(y0, sc, t.h, false);
+    int32_t r = HostEdge(x1, sc, t.w, true);
+    int32_t b = HostEdge(y1, sc, t.h, true);
     return {{{l, tp}, {uint32_t(std::max(r - l, 0)), uint32_t(std::max(b - tp, 0))}}, 0, 1};
 }
 
@@ -4257,11 +4342,11 @@ DrawnRect ReadDrawnRect(uint32_t src_rects, uint32_t dst_points, uint32_t i) {
     return r;
 }
 
-// a guest coordinate read as unsigned, times the host scale
-uint32_t ScaleUnsigned(int32_t v, float sc) { return uint32_t(uint32_t(v) * sc); }
-
 // a drawn copy's taps round down a ratio a hair over a whole number
 constexpr float kTapsSlack = 1e-3f;
+// the most taps a box filter takes per axis: 8 covers an 8x render scale, and 64 samples per pixel is already more
+// than a read-back can spend
+constexpr uint32_t kMaxTaps = 8;
 
 // one Blit per rect: for formats that differ or a multisampled target
 void VulkanBackend::CopyByDraw(const Target& src_t, Image* src_res, Target& dst_t, const CopyList& l) {
@@ -4281,9 +4366,12 @@ void VulkanBackend::CopyByDraw(const Target& src_t, Image* src_res, Target& dst_
         float vy = r.dy * dst_scale;
         float vw = (r.x1 - r.x0) * dst_scale;
         float vh = (r.y1 - r.y0) * dst_scale;
-        int32_t right = std::min(int32_t(vx + vw), int32_t(dst_t.w));
-        int32_t bottom = std::min(int32_t(vy + vh), int32_t(dst_t.h));
-        Rect scissor{int32_t(vx), int32_t(vy), right, bottom};
+        // the scissor covers every pixel the viewport touches: a pixel cut off here is a line of what was under it
+        int32_t left = std::clamp<int32_t>(int32_t(std::floor(vx)), 0, int32_t(dst_t.w));
+        int32_t top = std::clamp<int32_t>(int32_t(std::floor(vy)), 0, int32_t(dst_t.h));
+        int32_t right = std::clamp<int32_t>(int32_t(std::ceil(vx + vw)), 0, int32_t(dst_t.w));
+        int32_t bottom = std::clamp<int32_t>(int32_t(std::ceil(vy + vh)), 0, int32_t(dst_t.h));
+        Rect scissor{left, top, right, bottom};
         if (scissor.right <= scissor.left || scissor.bottom <= scissor.top) continue;
         SetViewport(vx, vy, vw, vh);
         SetScissor(scissor);
@@ -4301,36 +4389,40 @@ void VulkanBackend::CopyByDraw(const Target& src_t, Image* src_res, Target& dst_
 void VulkanBackend::CopyByRegion(const Target& src_t, Image* src_res, Target& dst_t, const CopyList& l) {
     Transition(*src_res, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     Transition(*dst_t.res, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    float dst_scale = float(dst_t.w) / dst_t.gw;
+    // the source rect is in the source target's pixels and the destination point in the destination's: each its own
+    // scale, which are the same until a target outlives a render scale change
+    float src_scale = float(src_t.w) / float(src_t.gw);
+    float dst_scale = float(dst_t.w) / float(dst_t.gw);
     bool listed = l.count && l.src_rects;
     uint32_t n = listed ? l.count : 1;
     for (uint32_t i = 0; i < n; i++) {
-        uint32_t left = 0;
-        uint32_t top = 0;
-        uint32_t right = std::min(src_t.w, dst_t.w);
-        uint32_t bottom = std::min(src_t.h, dst_t.h);
-        uint32_t dx = 0;
-        uint32_t dy = 0;
+        int32_t left = 0;
+        int32_t top = 0;
+        int32_t right = int32_t(std::min(src_t.w, dst_t.w));
+        int32_t bottom = int32_t(std::min(src_t.h, dst_t.h));
+        int32_t dx = 0;
+        int32_t dy = 0;
         if (listed) {
             GuestRect r = ReadGuestRect(l.src_rects, i);
-            left = ScaleUnsigned(r.left, dst_scale);
-            top = ScaleUnsigned(r.top, dst_scale);
-            right = std::min(ScaleUnsigned(r.right, dst_scale), src_t.w);
-            bottom = std::min(ScaleUnsigned(r.bottom, dst_scale), src_t.h);
-            dx = left;
-            dy = top;
+            left = HostEdge(r.left, src_scale, src_t.w, false);
+            top = HostEdge(r.top, src_scale, src_t.h, false);
+            right = HostEdge(r.right, src_scale, src_t.w, true);
+            bottom = HostEdge(r.bottom, src_scale, src_t.h, true);
+            dx = HostEdge(r.left, dst_scale, dst_t.w, false);
+            dy = HostEdge(r.top, dst_scale, dst_t.h, false);
             if (l.dst_points) {
                 GuestPoint p = ReadGuestPoint(l.dst_points, i);
-                dx = ScaleUnsigned(p.x, dst_scale);
-                dy = ScaleUnsigned(p.y, dst_scale);
+                dx = HostEdge(p.x, dst_scale, dst_t.w, false);
+                dy = HostEdge(p.y, dst_scale, dst_t.h, false);
             }
         }
-        if (right <= left || bottom <= top || dx >= dst_t.w || dy >= dst_t.h) continue;
-        right = std::min(right, left + dst_t.w - dx);
-        bottom = std::min(bottom, top + dst_t.h - dy);
+        if (right <= left || bottom <= top || dx >= int32_t(dst_t.w) || dy >= int32_t(dst_t.h)) continue;
+        // the copy keeps its size: a rect running off the destination is cut at both ends
+        right = std::min(right, left + int32_t(dst_t.w) - dx);
+        bottom = std::min(bottom, top + int32_t(dst_t.h) - dy);
         VkImageSubresourceLayers layer{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        VkImageCopy c{layer, {int32_t(left), int32_t(top), 0}, layer, {int32_t(dx), int32_t(dy), 0},
-                      {right - left, bottom - top, 1}};
+        VkImageCopy c{layer, {left, top, 0}, layer, {dx, dy, 0},
+                      {uint32_t(right - left), uint32_t(bottom - top), 1}};
         vkCmdCopyImage(cl_, src_res->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst_t.res->image,
                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
     }
@@ -4361,8 +4453,10 @@ void VulkanBackend::Copy(const Surface& src, const Surface& dst, uint32_t count,
     Image* from = Flat(*src_t);
     if (!from) return;
     CopyList l{.count = count, .src_rects = src_rects, .dst_points = dst_points};
-    if (src_t->fmt != dst_t->fmt || Ms(*dst_t) > 1) {
-        // formats differ, or a multisampled target takes no copy: drawn across
+    float src_scale = float(src_t->w) / float(src_t->gw);
+    float dst_scale = float(dst_t->w) / float(dst_t->gw);
+    if (src_t->fmt != dst_t->fmt || Ms(*dst_t) > 1 || std::fabs(src_scale - dst_scale) > 1e-4f) {
+        // formats differ, a multisampled target takes no copy, or the two are at different scales: drawn across
         CopyByDraw(*src_t, from, *dst_t, l);
         return;
     }
@@ -4718,13 +4812,78 @@ bool VulkanBackend::DrawSmaaPasses(Image* src, VkFormat fmt, uint32_t w, uint32_
     return true;
 }
 
+// where the picture lands in the back buffer: the shape the console puts out, 16:9 in its widescreen mode, pillarboxed
+// rather than stretched across the phone's wider screen, or the shape the panel's Aspect ratio asks for
+VulkanBackend::FramePlace VulkanBackend::PlaceFrame(const Target& t) {
+    float tv = app::Widescreen() ? 16.0f / 9.0f : 4.0f / 3.0f;
+    uint32_t shape = game::Opt().aspect;
+    if (shape == 1) tv = 16.0f / 9.0f;
+    // only the rows the title drew: the black it leaves under its picture is not shown, and the rows kept are as
+    // tall as on the TV
+    bool cut = shown_rows_ && shown_rows_ < t.gh;
+    float aspect = cut ? tv * float(t.gh) / float(shown_rows_) : tv;
+    float w = float(bb_w_);
+    float h = float(bb_h_);
+    FramePlace p;
+    if (shape >= 3) {
+        // FILL: the picture keeps the TV's shape and is zoomed until the screen is covered, so a screen wider than the
+        // TV loses rows at the top and bottom rather than gaining columns at the sides
+        p.w = std::max(w, h * aspect);
+        p.h = p.w / aspect;
+    } else {
+        if (shape >= 2) aspect = w / std::max(h, 1.0f);
+        p.w = std::min(w, h * aspect);
+        p.h = p.w / aspect;
+    }
+    p.x = (w - p.w) / 2;
+    p.y = (h - p.h) / 2;
+    p.rows = cut ? float(shown_rows_) / float(t.gh) : 1.0f;
+    return p;
+}
+
+// the attachment must be rendering: the bars are cleared inside the pass, so the surface is never loaded or written
+// whole for a picture that covers most of it
+void VulkanBackend::ClearBars(Image& bb, const FramePlace& p, const VkClearColorValue& colour) {
+    // the picture rounded inward: a pixel the blit may not cover is cleared first and drawn over after, never left as
+    // whatever the surface held last frame
+    int32_t x0 = std::clamp<int32_t>(int32_t(std::floor(p.x)), 0, int32_t(bb.w));
+    int32_t y0 = std::clamp<int32_t>(int32_t(std::floor(p.y)), 0, int32_t(bb.h));
+    int32_t x1 = std::clamp<int32_t>(int32_t(std::floor(p.x + p.w)), 0, int32_t(bb.w));
+    int32_t y1 = std::clamp<int32_t>(int32_t(std::floor(p.y + p.h)), 0, int32_t(bb.h));
+    VkClearRect rs[4];
+    uint32_t n = 0;
+    auto add = [&](int32_t l, int32_t tp, int32_t r, int32_t b) {
+        if (r <= l || b <= tp) return;
+        rs[n++] = {{{l, tp}, {uint32_t(r - l), uint32_t(b - tp)}}, 0, 1};
+    };
+    add(0, 0, x0, int32_t(bb.h));
+    add(x1, 0, int32_t(bb.w), int32_t(bb.h));
+    add(x0, 0, x1, y0);
+    add(x0, y1, x1, int32_t(bb.h));
+    if (!n) return;
+    VkClearAttachment ca{};
+    ca.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    ca.colorAttachment = 0;
+    ca.clearValue.color = colour;
+    SetScissor({0, 0, int32_t(bb.w), int32_t(bb.h)});
+    vkCmdClearAttachments(cl_, 1, &ca, n, rs);
+}
+
 void VulkanBackend::DrawSdrFrame(Target* t, Image* r, Image* bb) {
-    Transition(*bb, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     VkClearColorValue black{};
     black.float32[3] = 1;
-    VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdClearColorImage(cl_, bb->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
-    SetAttachments(bb, nullptr);
+    if (t && r) {
+        // the frame and the UI cover the surface but for the bars, which are cleared inside the pass: nothing reads
+        // last frame's picture, so the pass loads none of it
+        SetAttachments(bb, nullptr, VK_ATTACHMENT_LOAD_OP_DONT_CARE);
+        EnsureRendering();
+        ClearBars(*bb, PlaceFrame(*t), black);
+    } else {
+        Transition(*bb, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdClearColorImage(cl_, bb->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
+        SetAttachments(bb, nullptr);
+    }
     bound_rt_ = bound_ds_ = nullptr;
     if (t) BlitFrame(*t, r, swap_fmt_);
     RenderUi();
@@ -4751,11 +4910,19 @@ bool VulkanBackend::EnsureOutTargets() {
 void VulkanBackend::DrawHdrFrame(Target* t, Image* r, Image* bb) {
     VkClearColorValue clear{};
     VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    for (int i = 0; i < kOutTargets; i++) {
-        Transition(*out_[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        vkCmdClearColorImage(cl_, out_[i]->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+    // the panel is transparent where the UI is not, and the UI is not everywhere
+    Transition(*out_[kOutPanel], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    vkCmdClearColorImage(cl_, out_[kOutPanel]->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+    // the frame's target only needs its bars cleared: BlitFrame draws the rest
+    if (t && r) {
+        SetAttachments(out_[kOutFrame].get(), nullptr, VK_ATTACHMENT_LOAD_OP_DONT_CARE);
+        EnsureRendering();
+        ClearBars(*out_[kOutFrame], PlaceFrame(*t), clear);
+    } else {
+        Transition(*out_[kOutFrame], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        vkCmdClearColorImage(cl_, out_[kOutFrame]->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+        SetAttachments(out_[kOutFrame].get(), nullptr);
     }
-    SetAttachments(out_[kOutFrame].get(), nullptr);
     bound_rt_ = bound_ds_ = nullptr;
     if (t) BlitFrame(*t, r, kOutFrameFormat);
     SetAttachments(out_[kOutPanel].get(), nullptr);
@@ -4767,32 +4934,9 @@ void VulkanBackend::DrawHdrFrame(Target* t, Image* r, Image* bb) {
 
 // the frame letterboxed to the game's aspect into the bound target
 void VulkanBackend::BlitFrame(Target& t, Image* r, VkFormat rtv) {
-    // the shape the console puts out, 16:9 in its widescreen mode: the title draws for that, not for the phone's
-    // wider screen, so the picture is pillarboxed rather than stretched across it
-    float tv = app::Widescreen() ? 16.0f / 9.0f : 4.0f / 3.0f;
-    // or the shape the panel's Aspect ratio asks for: 16:9, the whole screen stretched, or filled with what overflows
-    // cut off
-    uint32_t shape = game::Opt().aspect;
-    if (shape == 1) tv = 16.0f / 9.0f;
-    // only the rows the title drew: the black it leaves under its picture is not shown, and the rows kept are as
-    // tall as on the TV
-    bool cut = shown_rows_ && shown_rows_ < t.gh;
-    float aspect = cut ? tv * float(t.gh) / float(shown_rows_) : tv;
-    float w = float(bb_w_);
-    float h = float(bb_h_);
-    float vw, vh;
-    if (shape >= 3) {
-        // FILL: the picture keeps the TV's shape and is zoomed until the screen is covered, so a screen wider than the
-        // TV loses rows at the top and bottom rather than gaining columns at the sides
-        vw = std::max(w, h * aspect);
-        vh = vw / aspect;
-    } else {
-        if (shape >= 2) aspect = w / std::max(h, 1.0f);
-        vw = std::min(w, h * aspect);
-        vh = vw / aspect;
-    }
-    float uv[4] = {0, 0, 1, cut ? float(shown_rows_) / float(t.gh) : 1.0f};
-    SetViewport((w - vw) / 2, (h - vh) / 2, vw, vh);
+    FramePlace p = PlaceFrame(t);
+    float uv[4] = {0, 0, 1, p.rows};
+    SetViewport(p.x, p.y, p.w, p.h);
     SetScissor({0, 0, int32_t(bb_w_), int32_t(bb_h_)});
     if (r) Blit(r, uv, {.gamma = gamma_, .rtv = rtv});
 }
@@ -5041,7 +5185,15 @@ VulkanBackend::CopySource VulkanBackend::PrepareCopySource(Target& t, const Shri
     CopySource out{Flat(t), nullptr};
     if (!out.res) return out;
     if (t.w != t.gw || t.h != t.gh || t.fmt != kBgra) {
-        out.down = Shrink(out.res, t.gw, t.gh, o);
+        ShrinkOptions s = o;
+        if (s.taps <= 1) {
+            // one bilinear tap reads four host texels: past a render scale of 2 it drops whole rows and columns of the
+            // target, and the title reads its text back with strokes missing. Taps two texels apart cover the same
+            // footprint at half the samples, the sampler averaging four texels of its own
+            float sc = std::max(float(t.w) / float(std::max(t.gw, 1u)), float(t.h) / float(std::max(t.gh, 1u)));
+            s.taps = uint32_t(std::clamp(std::ceil(sc * 0.5f - kTapsSlack), 1.0f, float(kMaxTaps)));
+        }
+        out.down = Shrink(out.res, t.gw, t.gh, s);
         out.res = out.down.get();
     }
     if (out.res) Transition(*out.res, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
@@ -5356,7 +5508,3 @@ void WaitGpuFrame(uint64_t n) {
 
 }  // namespace gpu
 
-// the touch controls' art as ImGui textures: the backend makes them on the frame it first draws them
-ImTextureID vkui::Texture(const uint8_t* rgba, uint32_t w, uint32_t h) {
-    return gpu::g_vulkan ? gpu::g_vulkan->AddUiTexture(rgba, w, h) : ImTextureID();
-}

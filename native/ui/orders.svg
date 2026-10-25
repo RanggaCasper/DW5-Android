@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
-  <!-- BACK: the bodyguard's orders, the standard raised -->
-  <g fill="#fff">
-    <rect x="32" y="18" width="7" height="60" rx="3.5"/>
-    <path d="M39 22 L72 32 L39 42 Z"/>
-  </g>
-</svg>

@@ -48,14 +48,10 @@ The controls sit where the original pad has them:
 | **ORDERS** | the bodyguard's orders, on the pad's black button |
 | **gear** | the settings panel, top middle |
 
-The buttons are drawn with the pad's own colours, from `native/ui/*.rgba` (RGBA8888, 96 x 96, embedded by CMake:
-the Android build has no image decoder). Their layout follows the Duke pad drawing xemu ships, `data/duke.svg`; that
-file is a colour-coded mask for xemu's own UI, so the glyphs here are drawn to match it rather than copied from it.
-Each icon is drawn from an `.svg` beside it: edit that, run `tools/ui_icons.sh` to write the `.rgba`, commit both.
-The panel's **Button style** draws the controls either as the pad's letters or as what they do in the game: a sword
-on X, a maul on Y, the musou burst on B and an arrow up on A, and a back arrow, a pause, a shield, a bow, a walk, a
-map, a standard and the rage flame on the pills, in the order the original's □ △ ○ ✕ / L1 R1 L3 R3 / Start Select /
-white black have them.
+The controls are drawn the way the pad's are: the face buttons in its colours — A green, B red, X blue, Y yellow,
+their letters in white — and the pills for the pad's other buttons, MAP on its White and ORDERS on its Black. The
+layout follows the Duke pad drawing xemu ships, `data/duke.svg`, with the face buttons' diamond, the White left of
+the Black and the D-pad's four directions apart.
 
 A controller works as on the Xbox, with its rumble; while one is plugged in the on-screen controls are hidden, the
 gear staying for the panel. A keyboard works as port 1's pad, under a real pad if one is plugged in. The panel takes the D-pad and **A** as well as a finger, so it can
@@ -78,14 +74,13 @@ written to `settings.toml` at once.
 | **Aspect ratio** | the TV's shape, 16:9, the whole screen stretched, or the whole screen covered with the overflow cut | ORIGINAL |
 | **FPS counter** | the frame rate in the top left corner, amber under the cap | ON |
 | **HDR** | HDR10 when the display offers it; greyed when it does not | OFF |
-| **Button style** | the game's actions — sword, maul, musou, jump, shield, bow, rage — or the pad's letters | ACTIONS |
-| **Button art** | the icons, or letters and shapes with no icon texture made at all | OFF |
 | **Button size** | 50 to 150%, the layout's positions kept | 100% |
 | **Button opacity** | the on-screen controls, faint enough to see the game through | 100% |
 | **Move controls** | drag each control where the thumb wants it; Done and Reset in the middle of the screen | pad's layout |
 
-The frame rate cap (60) and the display mode are only in the file. 30 is not a cap the port offers: the title counts
-its timing at 60 and runs at half speed below it.
+The frame rate cap (60) and the display mode are only in the file. The cap cannot be lowered to 30: the title counts
+its timing at 60 and runs at half speed below it, and the frame skip is what keeps it there on a device that cannot
+draw 60 — a frame left undrawn is a frame the title does not wait for.
 
 ## Building
 

@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
-  <!-- heavy attack: the maul, swung where the sword is not -->
-  <circle cx="48" cy="48" r="46" fill="#E01B24"/>
-  <g fill="#fff" transform="rotate(45 48 48)">
-    <rect x="44" y="30" width="8" height="40" rx="4"/>
-    <rect x="28" y="20" width="40" height="15" rx="6"/>
-  </g>
-</svg>

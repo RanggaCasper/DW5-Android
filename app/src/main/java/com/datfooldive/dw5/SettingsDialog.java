@@ -25,8 +25,7 @@ class SettingsDialog extends Dialog {
 
     // the numbers native/settings_bridge.cpp reads and writes, in its order
     static final int RESOLUTION = 0, ANTI_ALIAS = 1, ANISO = 2, VSYNC = 3, FRAME_SKIP = 4, ASPECT = 5, FPS = 6,
-            HDR = 7, HDR_AVAILABLE = 8, STYLE = 9, SCALE = 10, OPACITY = 11, ART = 12, OUT_W = 13, OUT_H = 14,
-            COUNT = 15;
+            HDR = 7, HDR_AVAILABLE = 8, SCALE = 9, OPACITY = 10, OUT_W = 11, OUT_H = 12, COUNT = 13;
 
     private static final int BG = 0xFF0F0D0D;
     private static final int BORDER = 0xFFB8241A;
@@ -40,7 +39,6 @@ class SettingsDialog extends Dialog {
     private static final String[] kAniso = {"GAME DEFAULT", "2X", "4X", "8X", "16X"};
     private static final int[] kAnisoValues = {0, 2, 4, 8, 16};
     private static final String[] kAspect = {"ORIGINAL", "16:9", "STRETCH", "FILL"};
-    private static final String[] kStyle = {"XBOX", "ACTIONS"};
 
     private final DW5Activity activity;  // the dialog's own context is a wrapper around it, not it
     private final int[] v = new int[COUNT];
@@ -51,8 +49,8 @@ class SettingsDialog extends Dialog {
     private final TextView[] tabs = new TextView[4];
     private final LinearLayout[] pages = new LinearLayout[4];
 
-    private TextView antiAliasText, anisoText, aspectText, styleText;
-    private TextView vsync, frameSkip, fps, hdr, art;
+    private TextView antiAliasText, anisoText, aspectText;
+    private TextView vsync, frameSkip, fps, hdr;
 
     SettingsDialog(DW5Activity activity) {
         super(activity);
@@ -152,9 +150,6 @@ class SettingsDialog extends Dialog {
     }
 
     private void controls(LinearLayout box) {
-        styleText = stepper(box, "BUTTON STYLE", kStyle, STYLE);
-        // off: the controls are letters and shapes, and no icon texture is made at all
-        art = toggle(box, "BUTTON ART", ART);
         slider(box, "BUTTON SIZE", SCALE, 50, 150, 1);
         slider(box, "BUTTON OPACITY", OPACITY, 20, 100, 1);
 
@@ -352,8 +347,6 @@ class SettingsDialog extends Dialog {
         paint(hdr, v[HDR] != 0);
         hdr.setEnabled(v[HDR_AVAILABLE] != 0);
         hdr.setAlpha(v[HDR_AVAILABLE] != 0 ? 1f : 0.4f);
-        styleText.setText(kStyle[Math.min(v[STYLE], 1)]);
-        paint(art, v[ART] != 0);
         bars[SCALE].setProgress(v[SCALE] - 50);
         show(SCALE, 50, 1);
         bars[OPACITY].setProgress(v[OPACITY] - 20);
