@@ -79,6 +79,7 @@ written to `settings.toml` at once.
 | **FPS counter** | the frame rate in the top left corner, amber under the cap | ON |
 | **HDR** | HDR10 when the display offers it; greyed when it does not | OFF |
 | **Button style** | the game's actions — sword, maul, musou, jump, shield, bow, rage — or the pad's letters | ACTIONS |
+| **Button art** | the icons, or letters and shapes with no icon texture made at all | OFF |
 | **Button size** | 50 to 150%, the layout's positions kept | 100% |
 | **Button opacity** | the on-screen controls, faint enough to see the game through | 100% |
 | **Move controls** | drag each control where the thumb wants it; Done and Reset in the middle of the screen | pad's layout |

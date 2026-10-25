@@ -248,24 +248,28 @@ const char* const kArtPad[4] = {ui_icons::kBtnA, ui_icons::kBtnB, ui_icons::kBtn
 const char* const kArtGame[4] = {ui_icons::kActJump, ui_icons::kActMusou, ui_icons::kActLight, ui_icons::kActHeavy};
 const char* const kPillArt[kPillCount] = {ui_icons::kActBack,  ui_icons::kActPause, ui_icons::kActGuard, ui_icons::kActShoot,
                                           ui_icons::kActMove,  ui_icons::kActRage,  ui_icons::kActMap,   ui_icons::kActOrders};
-ImTextureID g_tex[4];
+// Both styles are made once and kept: a style change then only picks which set is drawn, where making the new set on
+// the change left the old textures and their descriptor sets behind every time
+ImTextureID g_tex_pad[4];
+ImTextureID g_tex_game[4];
 ImTextureID g_pill_tex[kPillCount];
-int g_art_style = -1;  // the style the textures were made for, the panel's setting having changed since
+bool g_art_made;
 
 int ArtStyle() { return int(std::min<uint32_t>(game::Opt().controls_style, 1)); }
+// the panel's BUTTON ART: off draws letters and shapes and makes no texture at all, which is what the controls were
+// before the icons and what a device that struggles with them can fall back to
+bool UseArt() { return game::Opt().controls_art != 0; }
 
 ImTextureID Icon(const char* bytes) {
     return vkui::Texture(reinterpret_cast<const uint8_t*>(bytes), ui_icons::kIconSize, ui_icons::kIconSize);
 }
 
 void EnsureArt() {
-    const int style = ArtStyle();
-    if (g_tex[0] && g_art_style == style) return;
-    const char* const* art = style ? kArtGame : kArtPad;
-    for (int b = 0; b < 4; b++) g_tex[b] = Icon(art[b]);
-    if (style)
-        for (int i = 0; i < kPillCount; i++) g_pill_tex[i] = kPillArt[i] ? Icon(kPillArt[i]) : nullptr;
-    g_art_style = style;
+    if (g_art_made || !UseArt()) return;
+    g_art_made = true;  // one attempt: a texture that will not be made is not tried again every frame
+    for (int b = 0; b < 4; b++) g_tex_pad[b] = Icon(kArtPad[b]);
+    for (int b = 0; b < 4; b++) g_tex_game[b] = Icon(kArtGame[b]);
+    for (int i = 0; i < kPillCount; i++) g_pill_tex[i] = kPillArt[i] ? Icon(kPillArt[i]) : nullptr;
 }
 
 }  // namespace
@@ -481,14 +485,20 @@ void Draw() {
                         l.stick_r * 0.36f, IM_COL32(255, 255, 255, at(70)), 32);
 
     // the four face buttons, the pad's own art
+    const ImTextureID* face = ArtStyle() ? g_tex_game : g_tex_pad;
+    static const char* const kLetters[4] = {"A", "B", "X", "Y"};
     for (int b = 0; b < 4; b++) {
         ImVec2 c(l.btn[b][0], l.btn[b][1]);
         ImVec2 a(c.x - l.btn_r, c.y - l.btn_r), z(c.x + l.btn_r, c.y + l.btn_r);
-        if (g_tex[b]) dl->AddImage(g_tex[b], a, z, ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, at(255)));
-        else {
-            dl->AddCircleFilled(c, l.btn_r, fill, 32);
-            dl->AddCircle(c, l.btn_r, line, 32, 2.0f);
+        if (UseArt() && face[b]) {
+            dl->AddImage(face[b], a, z, ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, at(255)));
+            continue;
         }
+        dl->AddCircleFilled(c, l.btn_r, fill, 32);
+        dl->AddCircle(c, l.btn_r, line, 32, 2.0f);
+        float size = l.btn_r * 0.95f;
+        ImVec2 t = font->CalcTextSizeA(size, FLT_MAX, 0, kLetters[b]);
+        dl->AddText(font, size, ImVec2(c.x - t.x / 2, c.y - t.y / 2), label, kLetters[b]);
     }
 
     // the arrows: four round buttons apart, each with its arrow, lit while held
@@ -524,7 +534,7 @@ void Draw() {
         dl->AddRect(ImVec2(c.x - l.pill_w / 2, c.y - l.pill_h / 2), ImVec2(c.x + l.pill_w / 2, c.y + l.pill_h / 2),
                     line, l.pill_h / 2, 0, 1.5f);
         // in the game's style the pill shows what it does, the letters standing for nothing there
-        if (ArtStyle() && g_pill_tex[i]) {
+        if (UseArt() && ArtStyle() && g_pill_tex[i]) {
             float s = l.pill_h * 0.95f;
             dl->AddImage(g_pill_tex[i], ImVec2(c.x - s / 2, c.y - s / 2), ImVec2(c.x + s / 2, c.y + s / 2), ImVec2(0, 0),
                          ImVec2(1, 1), IM_COL32(255, 255, 255, at(235)));

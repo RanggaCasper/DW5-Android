@@ -18,7 +18,7 @@ namespace {
 // the order the dialog's values are in, the same numbers SettingsDialog.java has
 enum Key : int {
     kResolution, kAntiAlias, kAniso, kVsync, kFrameSkip, kAspect, kFpsCounter, kHdr, kHdrAvailable, kControlsStyle,
-    kControlsScale, kControlsOpacity, kOutWidth, kOutHeight, kKeyCount
+    kControlsScale, kControlsOpacity, kControlsArt, kOutWidth, kOutHeight, kKeyCount
 };
 
 // the one index the panel shows for the two settings anti-aliasing is made of: 0 off, 1 SMAA, 2 MSAA 2X, 3 MSAA 4X
@@ -60,6 +60,7 @@ extern "C" JNIEXPORT jintArray JNICALL Java_com_datfooldive_dw5_DW5Activity_nati
     v[kControlsStyle] = jint(o.controls_style);
     v[kControlsScale] = jint(o.controls_scale);
     v[kControlsOpacity] = jint(o.controls_opacity);
+    v[kControlsArt] = jint(o.controls_art);
     v[kOutWidth] = jint(out.width);
     v[kOutHeight] = jint(out.height);
     jintArray arr = env->NewIntArray(kKeyCount);
@@ -89,6 +90,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_datfooldive_dw5_DW5Activity_nativeSet
         case kControlsStyle: o.controls_style = uint32_t(std::clamp<jint>(value, 0, 1)); break;
         case kControlsScale: o.controls_scale = uint32_t(std::clamp<jint>(value, 50, 150)); break;
         case kControlsOpacity: o.controls_opacity = uint32_t(std::clamp<jint>(value, 20, 100)); break;
+        case kControlsArt: o.controls_art = value != 0 ? 1 : 0; break;
         default: return;
     }
     if (commit) app::Save();
@@ -110,6 +112,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_datfooldive_dw5_DW5Activity_nativeSet
     o.controls_style = 1;
     o.controls_scale = 100;
     o.controls_opacity = 100;
+    o.controls_art = 0;
     touch::EditReset();
     app::Save();
 }

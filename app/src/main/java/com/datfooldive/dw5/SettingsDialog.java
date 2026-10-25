@@ -14,7 +14,6 @@ import android.view.WindowManager;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
-import android.widget.Switch;
 import android.widget.TextView;
 
 import java.util.Locale;
@@ -26,7 +25,8 @@ class SettingsDialog extends Dialog {
 
     // the numbers native/settings_bridge.cpp reads and writes, in its order
     static final int RESOLUTION = 0, ANTI_ALIAS = 1, ANISO = 2, VSYNC = 3, FRAME_SKIP = 4, ASPECT = 5, FPS = 6,
-            HDR = 7, HDR_AVAILABLE = 8, STYLE = 9, SCALE = 10, OPACITY = 11, OUT_W = 12, OUT_H = 13, COUNT = 14;
+            HDR = 7, HDR_AVAILABLE = 8, STYLE = 9, SCALE = 10, OPACITY = 11, ART = 12, OUT_W = 13, OUT_H = 14,
+            COUNT = 15;
 
     private static final int BG = 0xFF0F0D0D;
     private static final int BORDER = 0xFFB8241A;
@@ -52,7 +52,7 @@ class SettingsDialog extends Dialog {
     private final LinearLayout[] pages = new LinearLayout[4];
 
     private TextView antiAliasText, anisoText, aspectText, styleText;
-    private Switch vsync, frameSkip, fps, hdr;
+    private TextView vsync, frameSkip, fps, hdr, art;
 
     SettingsDialog(DW5Activity activity) {
         super(activity);
@@ -153,6 +153,8 @@ class SettingsDialog extends Dialog {
 
     private void controls(LinearLayout box) {
         styleText = stepper(box, "BUTTON STYLE", kStyle, STYLE);
+        // off: the controls are letters and shapes, and no icon texture is made at all
+        art = toggle(box, "BUTTON ART", ART);
         slider(box, "BUTTON SIZE", SCALE, 50, 150, 1);
         slider(box, "BUTTON OPACITY", OPACITY, 20, 100, 1);
 
@@ -265,23 +267,39 @@ class SettingsDialog extends Dialog {
         return Math.max(0, Math.min(v[key], count - 1));
     }
 
-    private Switch toggle(LinearLayout box, String label, int key) {
+    // A switch of this panel's own: android.widget.Switch draws nothing at all under the game's bare theme
+    // (Theme.NoTitleBar.Fullscreen has no switch style, so the thumb and track come out empty), and the state reads
+    // better as a word anyway — gold while it is on
+    private TextView toggle(LinearLayout box, String label, int key) {
         LinearLayout row = new LinearLayout(getContext());
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(0, dp(4), 0, dp(4));
         row.addView(text(label, 13, TEXT), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        Switch sw = new Switch(getContext());
-        sw.setThumbTintList(new ColorStateList(new int[][] {{android.R.attr.state_checked}, {}},
-                new int[] {GOLD, 0xFF6A6360}));
-        sw.setTrackTintList(new ColorStateList(new int[][] {{android.R.attr.state_checked}, {}},
-                new int[] {0xFF7A2E24, 0xFF2A2523}));
-        sw.setOnCheckedChangeListener((b, on) -> {
-            if (!loading) DW5Activity.nativeSettingsSet(key, on ? 1 : 0, true);
+        TextView sw = text("", 12, DIM);
+        sw.setGravity(Gravity.CENTER);
+        sw.setMinWidth(dp(62));
+        sw.setPadding(dp(8), dp(5), dp(8), dp(5));
+        sw.setClickable(true);
+        sw.setFocusable(true);
+        sw.setOnClickListener(x -> {
+            if (loading) return;
+            boolean on = !Boolean.TRUE.equals(sw.getTag());
+            paint(sw, on);
+            DW5Activity.nativeSettingsSet(key, on ? 1 : 0, true);
         });
+        paint(sw, false);
         row.addView(sw);
         box.addView(row);
         return sw;
+    }
+
+    // the switch as it reads for a state, whether that came from a tap or from the file
+    private void paint(TextView sw, boolean on) {
+        sw.setTag(on);
+        sw.setText(on ? "ON" : "OFF");
+        sw.setTextColor(on ? GOLD : DIM);
+        sw.setBackground(chipBackground(on));
     }
 
     // ---------------------------------------------------------------- the panel
@@ -327,14 +345,15 @@ class SettingsDialog extends Dialog {
         show(RESOLUTION, 20, 5);
         antiAliasText.setText(kAntiAlias[Math.min(v[ANTI_ALIAS], 3)]);
         anisoText.setText(kAniso[index(ANISO, kAniso.length)]);
-        vsync.setChecked(v[VSYNC] != 0);
-        frameSkip.setChecked(v[FRAME_SKIP] != 0);
+        paint(vsync, v[VSYNC] != 0);
+        paint(frameSkip, v[FRAME_SKIP] != 0);
         aspectText.setText(kAspect[Math.min(v[ASPECT], 3)]);
-        fps.setChecked(v[FPS] != 0);
-        hdr.setChecked(v[HDR] != 0);
+        paint(fps, v[FPS] != 0);
+        paint(hdr, v[HDR] != 0);
         hdr.setEnabled(v[HDR_AVAILABLE] != 0);
         hdr.setAlpha(v[HDR_AVAILABLE] != 0 ? 1f : 0.4f);
         styleText.setText(kStyle[Math.min(v[STYLE], 1)]);
+        paint(art, v[ART] != 0);
         bars[SCALE].setProgress(v[SCALE] - 50);
         show(SCALE, 50, 1);
         bars[OPACITY].setProgress(v[OPACITY] - 20);

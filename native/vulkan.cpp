@@ -1735,10 +1735,13 @@ void VulkanBackend::CreateDefaults() {
 }
 
 bool VulkanBackend::InitUi() {
-    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16};
+    // one set per texture the UI draws: the font, the four face buttons and the eight pills, and again as many when the
+    // button style is changed. Sixteen was the font's and a few more, and a style change took it past that: the new
+    // textures then failed to make a set, and every frame tried again, each try a new image and a full barrier
+    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 64};
     VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-    pi.maxSets = 16;
+    pi.maxSets = 64;
     pi.poolSizeCount = 1;
     pi.pPoolSizes = &size;
     if (vkCreateDescriptorPool(dev_, &pi, nullptr, &ui_pool_) != VK_SUCCESS) return false;

@@ -19,6 +19,7 @@ struct Options {
     uint32_t controls_opacity = 100;  // the on-screen controls' opacity, 20 to 100% (Android)
     uint32_t controls_scale = 100;    // their size, 50 to 150% (Android); the layout editor sets where they sit
     uint32_t controls_style = 1;      // their art: 0 the pad's letters, 1 what each button does in the game (Android)
+    uint32_t controls_art = 0;        // 1 draws the icon textures, 0 draws letters and shapes and makes no texture at all
 };
 
 inline Options& Opt() {
