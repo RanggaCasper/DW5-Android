@@ -68,6 +68,7 @@ PFN_vkWaitSemaphoresKHR p_vkWaitSemaphores = nullptr;
 #include "host.h"
 #include "kernel/kernel.h"
 #include "vk_shader.h"
+#include "vk_ui.h"
 
 namespace gpu {
 
@@ -1055,6 +1056,9 @@ private:
     // UploadTarget, then its step
     void UploadTarget(Target& t, const Surface& s);
     ImageRef CreatePixelTexture(const std::vector<uint8_t>& px, uint32_t pitch, uint32_t w, uint32_t h);
+public:
+    // RGBA pixels as an ImGui texture, for the touch controls' buttons
+    ImTextureID AddUiTexture(const uint8_t* rgba, uint32_t w, uint32_t h);
 
 private:
     void Blit(Image* src, const float uvrect[4], const BlitOptions& o);
@@ -1325,6 +1329,7 @@ private:
     std::unordered_map<uint64_t, Tex> textures_;  // by data address, a P8 texture's with its palette's above
     std::unordered_map<uint64_t, VkPipeline> blit_psos_;
     ImageRef dummy_[3];  // what a stage without a texture reads: 2D, 3D, cube
+    std::vector<ImageRef> ui_images_;  // the touch controls' art, made once and kept
     // one frame capture: every draw in a text file, each target as the frame leaves it, the textures it read
     FILE* cap_ = nullptr;
     std::filesystem::path cap_dir_;
@@ -2734,6 +2739,29 @@ ImageRef VulkanBackend::CreatePixelTexture(const std::vector<uint8_t>& px, uint3
 }
 
 // RGBA pixels as an ImGui texture: copied into a BGRA image left readable, the sampler made once, the image kept
+ImTextureID VulkanBackend::AddUiTexture(const uint8_t* rgba, uint32_t w, uint32_t h) {
+    std::vector<uint8_t> bgra(size_t(w) * h * 4);
+    for (size_t i = 0; i < bgra.size(); i += 4) {
+        bgra[i] = rgba[i + 2];
+        bgra[i + 1] = rgba[i + 1];
+        bgra[i + 2] = rgba[i];
+        bgra[i + 3] = rgba[i + 3];
+    }
+    ImageRef tex = CreatePixelTexture(bgra, w * 4, w, h);
+    if (!tex) return ImTextureID();
+    VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    si.magFilter = VK_FILTER_LINEAR;
+    si.minFilter = VK_FILTER_LINEAR;
+    si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    si.maxLod = 0.25f;
+    VkSampler sampler = EnsureSampler(si, nullptr);
+    ImTextureID id = ImGui_ImplVulkan_AddTexture(sampler, tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    ui_images_.push_back(std::move(tex));
+    return id;
+}
+
 // CPU pixels of a color surface into its host target, scaled
 void VulkanBackend::UploadTarget(Target& t, const Surface& s) {
     g_perf.rtups++;
@@ -5508,3 +5536,7 @@ void WaitGpuFrame(uint64_t n) {
 
 }  // namespace gpu
 
+// the touch controls' art as ImGui textures: the backend makes them on the frame it first draws them
+ImTextureID vkui::Texture(const uint8_t* rgba, uint32_t w, uint32_t h) {
+    return gpu::g_vulkan ? gpu::g_vulkan->AddUiTexture(rgba, w, h) : ImTextureID();
+}

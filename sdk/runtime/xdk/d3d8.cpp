@@ -184,6 +184,10 @@ uint32_t NewSurface(uint32_t w, uint32_t h, uint32_t fmt, uint32_t bpp) {
 void SyncDeferred() {
     // deferred states live in the title's memory, the inline SetRenderState and SetTextureStageState write them
     for (uint32_t i = gpu::kRsDeferredFirst; i < gpu::kRsComplexFirst; i++) g_state.rs[i] = R32(kRenderState + i * 4);
+    // Dynasty Warriors 5 inlines SetRenderState_TextureFactor (the image has no such function to replace): the
+    // factor is only in the table, and left at 0 the fixed function alpha of the stage map's walls and unit
+    // markers (TFACTOR modulated) hid them
+    g_state.rs[gpu::kRsTextureFactor] = R32(kRenderState + gpu::kRsTextureFactor * 4);
     for (int s = 0; s < 4; s++)
         for (uint32_t i = 0; i < gpu::kTssBumpEnvMat00; i++) g_state.tss[s][i] = R32(kTextureState + (s * kStageStates + i) * 4);
 }
@@ -1460,7 +1464,30 @@ void EndPrimitive() {
     if (!prim || !count) return;
     SyncProgram();
     handle = g_state.vs_handle;
-    if (!(handle & 1) && (handle & 0xE) == 4) LOG_FIRST(1, "d3d: pretransformed immediate mode vertices are not supported");
+    // XYZRHW vertices are screen positions: drawn through a declaration they would be transformed like a model's and
+    // land off screen, so they are packed as the FVF lays them out and drawn as such
+    if (!(handle & 1) && (handle & 0xE) == 4) {
+        gpu::VertexShader fvf;
+        gpu::FvfInputs(handle, fvf);
+        uint32_t stride = fvf.stream_stride[0];
+        std::vector<uint8_t> bytes(size_t(count) * stride);
+        for (uint32_t v = 0; v < count; v++)
+            for (uint32_t s = 0; s < 16; s++) {
+                const auto& in = fvf.inputs[s];
+                if (!in.type) continue;
+                const float* a = &g_im_vertices[v * 64 + s * 4];
+                uint8_t* o = &bytes[size_t(v) * stride + in.offset];
+                if (in.type == 0x40) {  // D3DCOLOR: the slot's x y z w as the shader reads the colour, r g b a
+                    auto unorm = [](float f) { return uint32_t(std::clamp(f, 0.0f, 1.0f) * 255.0f + 0.5f); };
+                    uint32_t c = unorm(a[3]) << 24 | unorm(a[0]) << 16 | unorm(a[1]) << 8 | unorm(a[2]);
+                    std::memcpy(o, &c, 4);
+                } else {
+                    std::memcpy(o, a, (in.type >> 4) * sizeof(float));
+                }
+            }
+        DrawUp(prim, count, bytes.data(), stride);
+        return;
+    }
     auto bound = g_state.vs, from = handle & 1 ? bound : nullptr;
     Made& m = made[{from.get(), g_im_mask}];
     if (!m.vs) {

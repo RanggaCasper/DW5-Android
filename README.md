@@ -44,14 +44,17 @@ The controls sit where the original pad has them:
 | **R3** | musou rage, once an awakening seal is taken |
 | **START** | the battle's status screen |
 | **BACK** | the pad's own Back, which the game leaves unassigned |
-| **MAP** | the battle map, on the pad's white button |
-| **ORDERS** | the bodyguard's orders, on the pad's black button |
+| **MAP** | the battle map, on the pad's black button |
+| **ORDERS** | the bodyguard's orders, on the pad's white button |
 | **gear** | the settings panel, top middle |
 
-The controls are drawn the way the pad's are: the face buttons in its colours — A green, B red, X blue, Y yellow,
-their letters in white — and the pills for the pad's other buttons, MAP on its White and ORDERS on its Black. The
-layout follows the Duke pad drawing xemu ships, `data/duke.svg`, with the face buttons' diamond, the White left of
-the Black and the D-pad's four directions apart.
+The controls are discs and pills of black lacquer, each showing what it does in the game as a line icon (a sword for
+the attack, the sword swung for the charge, the burst for the musou, the leap, the shield, the bow, the flame of musou
+rage, the map and the standard) with the pad's button on it: the face buttons' letters on a badge in the pad's colours
+— A green, B red, X blue, Y yellow — MAP with the Black's dot, ORDERS with the White's, and the other buttons' names.
+Held, a control turns vermilion with a gold rim. The icons are `native/ui/*.svg`, flattened to `native/ui_paths.h` by
+`tools/ui_paths.py`; the letters and labels are `native/ui/*.a8` (`tools/ui_icons.sh`). The layout follows the Duke pad
+drawing xemu ships, `data/duke.svg`, with the face buttons' diamond and the D-pad's four directions apart.
 
 A controller works as on the Xbox, with its rumble; while one is plugged in the on-screen controls are hidden, the
 gear staying for the panel. A keyboard works as port 1's pad, under a real pad if one is plugged in. The panel takes the D-pad and **A** as well as a finger, so it can

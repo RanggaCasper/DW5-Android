@@ -1,5 +1,6 @@
-// The on-screen controls, laid out as the original Xbox pad's: the left stick walks, the four face buttons are the
-// pad's own, in its colours, and a drag on the right turns the camera. Touches come from SDL's finger events in
+// The on-screen controls, laid out as the original Xbox pad's: the left stick walks, the four face buttons and the
+// rest are the pad's, each drawn as what it does in the game with the pad's own letter or colour on it, and a drag on
+// the right turns the camera. Touches come from SDL's finger events in
 // window coordinates; what they leave is overlaid on the pad the keyboard left
 // (src/common/keyboard.cpp), so the game reads one report as on the console.
 #include <SDL3/SDL.h>
@@ -8,7 +9,6 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <cfloat>
 #include <cmath>
 #include <mutex>
 #include <vector>
@@ -21,6 +21,9 @@
 #include "core/log.h"
 #include "host.h"
 #include "loose.h"
+#include "ui_icons.h"
+#include "ui_paths.h"
+#include "vk_ui.h"
 
 namespace touch {
 
@@ -95,8 +98,8 @@ constexpr Point kDefaultUnits[kUnitCount] = {
     {0.235f, 0.920f},  // L3
     {0.700f, 0.920f},  // R3
     {0.500f, 0.090f},  // the gear
-    {0.255f, 0.090f},  // MAP, the pad's white button
-    {0.745f, 0.090f},  // ORDERS, the pad's black button
+    {0.255f, 0.090f},  // MAP
+    {0.745f, 0.090f},  // ORDERS
 };
 std::array<Point, kUnitCount> g_units = [] {
     std::array<Point, kUnitCount> a{};
@@ -107,6 +110,144 @@ std::array<Point, kUnitCount> g_units = [] {
 constexpr int kPillCount = 8;
 constexpr int kPillButton[kPillCount] = {kBtnStart, kBtnBack, kBtnLT, kBtnRT, kBtnL3, kBtnR3, kBtnMap, kBtnOrders};
 constexpr int kPillUnit[kPillCount] = {kUnitStart, kUnitBack, kUnitLT, kUnitRT, kUnitL3, kUnitR3, kUnitMap, kUnitOrders};
+
+// The controls' art (native/ui): what each button does in the game as a line icon, drawn as vectors at the gear's
+// weight (ui_paths.h, tools/ui_paths.py), and the pad's letters and button names as labels, white coverage the draw
+// tints (tools/ui_icons.sh), made into textures the first frame they are drawn.
+enum Art : int {
+    kArtLetterA, kArtLetterB, kArtLetterX, kArtLetterY,
+    kArtLT, kArtRT, kArtL3, kArtR3, kArtStart, kArtBack, kArtCount, kArtNone = -1
+};
+struct ArtImage {
+    ImTextureID tex = ImTextureID();
+    float u0 = 0, u1 = 1;  // the columns the glyph covers: a label is drawn at its own width, centred
+    float aspect = 1;      // the covered part's width over its height
+};
+ArtImage g_art[kArtCount];
+bool g_art_made = false;
+
+void EnsureArt() {
+    if (g_art_made) return;
+    g_art_made = true;  // one attempt: art that will not be made is not tried again every frame
+    using namespace ui_icons;
+    const struct {
+        const char* bytes;
+        int w, h;
+    } kSources[kArtCount] = {
+        {letter_a, kSize, kSize}, {letter_b, kSize, kSize}, {letter_x, kSize, kSize},
+        {letter_y, kSize, kSize}, {label_lt, kLabelW, kLabelH}, {label_rt, kLabelW, kLabelH},
+        {label_l3, kLabelW, kLabelH}, {label_r3, kLabelW, kLabelH}, {label_start, kLabelW, kLabelH},
+        {label_back, kLabelW, kLabelH},
+    };
+    std::vector<uint8_t> rgba;
+    for (int i = 0; i < kArtCount; i++) {
+        const auto& src = kSources[i];
+        const uint8_t* a = reinterpret_cast<const uint8_t*>(src.bytes);
+        rgba.assign(size_t(src.w) * src.h * 4, 255);
+        int first = src.w, last = -1;
+        for (int y = 0; y < src.h; y++)
+            for (int x = 0; x < src.w; x++) {
+                uint8_t c = a[size_t(y) * src.w + x];
+                rgba[(size_t(y) * src.w + x) * 4 + 3] = c;
+                if (c) first = std::min(first, x), last = std::max(last, x);
+            }
+        ArtImage& img = g_art[i];
+        img.tex = vkui::Texture(rgba.data(), uint32_t(src.w), uint32_t(src.h));
+        // a label keeps only its lettering's columns; a letter its whole square, so all of them line up
+        if (src.w != src.h && last >= first) {
+            img.u0 = float(first) / float(src.w);
+            img.u1 = float(last + 1) / float(src.w);
+        }
+        img.aspect = (img.u1 - img.u0) * float(src.w) / float(src.h);
+    }
+}
+
+// art as wide as its aspect at height h, centred on c, in col
+void DrawArt(ImDrawList* dl, int art, ImVec2 c, float h, ImU32 col) {
+    if (art < 0 || !g_art[art].tex) return;
+    const ArtImage& img = g_art[art];
+    float w = h * img.aspect;
+    dl->AddImage(img.tex, ImVec2(c.x - w / 2, c.y - h / 2), ImVec2(c.x + w / 2, c.y + h / 2), ImVec2(img.u0, 0),
+                 ImVec2(img.u1, 1), col);
+}
+
+// A line icon (ui_paths.h) drawn into a texture of the very size it is shown at, its lines size / 24 thick as the gear's
+// are. Each pixel's coverage comes from its distance to the nearest line, so where the lines meet they join as one
+// stroke with round ends and corners: drawn as separate translucent lines, every join came out darker and thicker.
+// Made once for each size the controls take, kept by size in steps of 4 px, so dragging the panel's button size makes a
+// few dozen at most.
+struct IconTexture {
+    const float* icon = nullptr;
+    int size = 0;
+    ImTextureID tex = ImTextureID();
+};
+std::vector<IconTexture> g_icon_tex;
+
+ImTextureID RasterIcon(const float* d, int size) {
+    struct Segment {
+        float ax, ay, bx, by;
+    };
+    struct Disc {
+        float x, y, r;
+    };
+    const float k = float(size) / 24.0f, half = std::max(float(size) * 0.042f, 1.5f) / 2;
+    std::vector<Segment> lines;
+    std::vector<Disc> discs;
+    for (;;) {
+        int kind = int(*d++);
+        if (kind < 0) break;
+        if (kind >= 2) {
+            float x = d[0] * k, y = d[1] * k, r = d[2] * k;
+            if (kind == 3) {
+                discs.push_back({x, y, r});
+            } else {
+                constexpr int kSides = 48;
+                for (int i = 0; i < kSides; i++) {
+                    float a0 = 6.2831853f * float(i) / kSides, a1 = 6.2831853f * float(i + 1) / kSides;
+                    lines.push_back({x + r * std::cos(a0), y + r * std::sin(a0), x + r * std::cos(a1),
+                                     y + r * std::sin(a1)});
+                }
+            }
+            d += 3;
+            continue;
+        }
+        int n = int(*d++);
+        for (int i = 0; i + 1 < n; i++)
+            lines.push_back({d[i * 2] * k, d[i * 2 + 1] * k, d[i * 2 + 2] * k, d[i * 2 + 3] * k});
+        if (kind == 1 && n > 2) lines.push_back({d[n * 2 - 2] * k, d[n * 2 - 1] * k, d[0] * k, d[1] * k});
+        d += n * 2;
+    }
+    std::vector<uint8_t> rgba(size_t(size) * size * 4, 255);
+    for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++) {
+            float px = float(x) + 0.5f, py = float(y) + 0.5f, best = 1e9f;
+            for (const Segment& s : lines) {
+                float vx = s.bx - s.ax, vy = s.by - s.ay, wx = px - s.ax, wy = py - s.ay;
+                float len = vx * vx + vy * vy;
+                float t = len > 0 ? std::clamp((wx * vx + wy * vy) / len, 0.0f, 1.0f) : 0.0f;
+                float dx = wx - vx * t, dy = wy - vy * t;
+                best = std::min(best, dx * dx + dy * dy);
+            }
+            float cover = std::clamp(half + 0.5f - std::sqrt(best), 0.0f, 1.0f);
+            for (const Disc& c : discs)
+                cover = std::max(cover, std::clamp(c.r + 0.5f - std::hypot(px - c.x, py - c.y), 0.0f, 1.0f));
+            rgba[(size_t(y) * size + x) * 4 + 3] = uint8_t(std::lround(cover * 255.0f));
+        }
+    return vkui::Texture(rgba.data(), uint32_t(size), uint32_t(size));
+}
+
+// a line icon size across, centred on c, in col, on whole pixels so its texture is drawn one to one
+void DrawIcon(ImDrawList* dl, const float* d, ImVec2 c, float size, ImU32 col) {
+    if (!d) return;
+    int px = std::max(int(std::lround(size / 4)) * 4, 8);
+    IconTexture* it = nullptr;
+    for (IconTexture& t : g_icon_tex)
+        if (t.icon == d && t.size == px) it = &t;
+    if (!it) it = &g_icon_tex.emplace_back(IconTexture{d, px, RasterIcon(d, px)});
+    if (!it->tex) return;
+    ImVec2 a(std::floor(c.x - float(px) / 2), std::floor(c.y - float(px) / 2));
+    dl->AddImage(it->tex, a, ImVec2(a.x + float(px), a.y + float(px)), ImVec2(0, 0), ImVec2(1, 1), col);
+}
 
 std::atomic<bool> g_editing{false};
 int g_drag = -1;            // the unit a finger is moving
@@ -210,8 +351,8 @@ void PressButton(int index, bool down) {
         // the triggers and the pad's two small buttons are all analog in the pad's own state
         const int which = index == kBtnLT    ? kLeftTrigger
                         : index == kBtnRT    ? kRightTrigger
-                        : index == kBtnMap   ? kWhite
-                                             : kBlack;
+                        : index == kBtnMap   ? kBlack
+                                             : kWhite;
         uint64_t v = g_analog.load();
         uint32_t shift = uint32_t(which) * 8;
         v = down ? (v | (0xFFull << shift)) : (v & ~(0xFFull << shift));
@@ -405,18 +546,18 @@ void Draw() {
     // the panel's opacity: everything the controls are drawn with, the gear too, is its own alpha times this
     const float fade = std::clamp(game::Opt().controls_opacity / 100.0f, 0.2f, 1.0f);
     auto at = [fade](int a) { return int(std::lround(float(a) * fade)); };
-    const ImU32 fill = IM_COL32(255, 255, 255, at(30)), line = IM_COL32(255, 255, 255, at(80));
-    const ImU32 label = IM_COL32(255, 255, 255, at(210));
-    ImFont* font = ImGui::GetFont();  // io.FontDefault stays null unless set: the frame's font, the atlas's first
+    // The look: flat discs of black lacquer with one thin rim; what a button does in the game is its icon in white, and
+    // which of the pad's buttons it is rides on its rim. Held, a control turns to vermilion lacquer with a gold rim.
+    const ImU32 kGold = IM_COL32(236, 190, 88, at(240));
+    const ImU32 base = IM_COL32(14, 13, 18, at(170)), lit = IM_COL32(150, 30, 22, at(215));
+    const ImU32 rim = IM_COL32(255, 255, 255, at(72)), ink = IM_COL32(255, 255, 255, at(235));
 
-    // the gear, drawn as the pills are: a dark disc with a thin rim, the gear's outline in it, gold while the panel
-    // is open
+    // the gear, drawn as the other controls are: a lacquer disc with a thin rim, the gear's outline in it
     {
         ImVec2 c(l.gear[0], l.gear[1]);
         float r = l.gear_r;
-        ImU32 stroke = label;
-        dl->AddCircleFilled(c, r * 1.3f, IM_COL32(20, 20, 20, at(150)), 40);
-        dl->AddCircle(c, r * 1.3f, line, 40, 1.5f);
+        dl->AddCircleFilled(c, r * 1.3f, base, 40);
+        dl->AddCircle(c, r * 1.3f, rim, 40, 1.5f);
         // eight teeth: each a flat top at the outer radius and a flat valley at the inner one, slanted sides between
         constexpr int kTeeth = 8;
         constexpr float kStep = 6.2831853f / kTeeth;
@@ -431,8 +572,8 @@ void Draw() {
             }
         }
         float width = std::max(r * 0.11f, 1.5f);
-        dl->AddPolyline(pts, kTeeth * 4, stroke, ImDrawFlags_Closed, width);
-        dl->AddCircle(c, r * 0.27f, stroke, 24, width);
+        dl->AddPolyline(pts, kTeeth * 4, ink, ImDrawFlags_Closed, width);
+        dl->AddCircle(c, r * 0.27f, ink, 24, width);
     }
     // a controller plugged in takes the pad's place: its controls are not drawn and take no touch, the gear staying
     // for the panel; whatever a finger held when it came in lets go
@@ -447,25 +588,49 @@ void Draw() {
     // a controller takes the pad's place: its controls are not drawn while one is plugged in
     if (pad) return;
 
-    // the stick
-    dl->AddCircleFilled(ImVec2(l.stick[0], l.stick[1]), l.stick_r, fill, 48);
-    dl->AddCircle(ImVec2(l.stick[0], l.stick[1]), l.stick_r, line, 48, 2.0f);
-    dl->AddCircleFilled(ImVec2(l.stick[0] + g_lx * l.stick_r * 0.72f, l.stick[1] - g_ly * l.stick_r * 0.72f),
-                        l.stick_r * 0.36f, IM_COL32(255, 255, 255, at(70)), 32);
+    EnsureArt();
+    auto disc = [&](ImVec2 c, float r, bool on) {
+        dl->AddCircleFilled(c, r, on ? lit : base, 48);
+        dl->AddCircle(c, r, on ? kGold : rim, 48, on ? std::max(r * 0.045f, 2.0f) : std::max(r * 0.022f, 1.2f));
+    };
 
-    // the four face buttons, the pad's own: A green, B red, X blue, Y yellow, each letter in white
-    static const int kFace[4][3] = {{106, 168, 79}, {198, 62, 48}, {44, 106, 176}, {222, 176, 60}};
-    static const char* const kLetters[4] = {"A", "B", "X", "Y"};
-    for (int b = 0; b < 4; b++) {
-        ImVec2 c(l.btn[b][0], l.btn[b][1]);
-        dl->AddCircleFilled(c, l.btn_r, IM_COL32(kFace[b][0], kFace[b][1], kFace[b][2], at(200)), 32);
-        dl->AddCircle(c, l.btn_r, line, 32, 2.0f);
-        float size = l.btn_r * 0.95f;
-        ImVec2 t = font->CalcTextSizeA(size, FLT_MAX, 0, kLetters[b]);
-        dl->AddText(font, size, ImVec2(c.x - t.x / 2, c.y - t.y / 2), IM_COL32(255, 255, 255, at(240)), kLetters[b]);
+    // the stick: its well, and the knob pushed as far as the finger has it
+    {
+        ImVec2 c(l.stick[0], l.stick[1]);
+        float x = g_lx.load(), y = g_ly.load();
+        bool on = x || y;
+        disc(c, l.stick_r, false);
+        ImVec2 k(c.x + x * l.stick_r * 0.62f, c.y - y * l.stick_r * 0.62f);
+        float kr = l.stick_r * 0.42f;
+        dl->AddCircleFilled(k, kr, on ? lit : IM_COL32(36, 34, 42, at(220)), 40);
+        dl->AddCircle(k, kr, on ? kGold : IM_COL32(255, 255, 255, at(110)), 40, std::max(kr * 0.05f, 1.2f));
     }
 
-    // the arrows: four round buttons apart, each with its arrow, lit while held
+    // the four face buttons: what each does in the game, and the pad's own letter on its badge, in the pad's colours
+    {
+        const uint64_t held = g_analog.load();
+        static const int kAnalogOf[4] = {kA, kB, kX, kY};
+        // A jump, B musou, X attack, Y charge: the PS2 game's Cross, Circle, Square, Triangle
+        static const float* const kIcon[4] = {ui_paths::kJump, ui_paths::kMusou, ui_paths::kAttack, ui_paths::kCharge};
+        static const int kLetter[4] = {kArtLetterA, kArtLetterB, kArtLetterX, kArtLetterY};
+        static const int kFace[4][3] = {{96, 176, 72}, {214, 64, 52}, {52, 120, 204}, {236, 186, 52}};
+        for (int b = 0; b < 4; b++) {
+            ImVec2 c(l.btn[b][0], l.btn[b][1]);
+            float r = l.btn_r;
+            bool on = (held >> (kAnalogOf[b] * 8)) & 0xFF;
+            disc(c, r, on);
+            DrawIcon(dl, kIcon[b], ImVec2(c.x - r * 0.05f, c.y - r * 0.05f), r * 1.12f, on ? kGold : ink);
+            // the badge on the rim, low on the right, set off from the disc by a ring of the lacquer's colour
+            ImVec2 bc(c.x + r * 0.70f, c.y + r * 0.70f);
+            float br = r * 0.36f;
+            dl->AddCircleFilled(bc, br + std::max(r * 0.06f, 2.0f), IM_COL32(10, 9, 12, at(220)), 32);
+            dl->AddCircleFilled(bc, br, IM_COL32(kFace[b][0], kFace[b][1], kFace[b][2], at(240)), 32);
+            ImU32 letter = b == 3 ? IM_COL32(40, 30, 10, at(240)) : IM_COL32(255, 255, 255, at(245));
+            DrawArt(dl, kLetter[b], bc, br * 1.45f, letter);
+        }
+    }
+
+    // the arrows: four small discs apart, each with its chevron pointing away from the middle
     {
         uint32_t held = g_buttons.load();
         const float dirs[4][2] = {{0, -1}, {0, 1}, {-1, 0}, {1, 0}};
@@ -473,33 +638,68 @@ void Draw() {
             ImVec2 c(l.arrow[a][0], l.arrow[a][1]);
             float r = l.arrow_r;
             bool on = held & kArrowBits[a];
-            dl->AddCircleFilled(c, r, on ? IM_COL32(255, 255, 255, at(90)) : fill, 32);
-            dl->AddCircle(c, r, line, 32, 2.0f);
-            // the arrow head pointing away from the middle
-            float dx = dirs[a][0], dy = dirs[a][1], t = r * 0.42f;
-            ImVec2 tip(c.x + dx * t, c.y + dy * t);
-            ImVec2 b1(c.x - dx * t * 0.55f - dy * t, c.y - dy * t * 0.55f + dx * t);
-            ImVec2 b2(c.x - dx * t * 0.55f + dy * t, c.y - dy * t * 0.55f - dx * t);
-            dl->AddTriangleFilled(tip, b1, b2, label);
+            disc(c, r, on);
+            float dx = dirs[a][0], dy = dirs[a][1], t = r * 0.36f;
+            ImVec2 tip(c.x + dx * t * 1.1f, c.y + dy * t * 1.1f);
+            ImVec2 b1(c.x - dx * t * 0.5f - dy * t, c.y - dy * t * 0.5f + dx * t);
+            ImVec2 b2(c.x - dx * t * 0.5f + dy * t, c.y - dy * t * 0.5f - dx * t);
+            ImVec2 pts[3] = {b1, tip, b2};
+            dl->AddPolyline(pts, 3, on ? kGold : ink, ImDrawFlags_None, std::max(r * 0.11f, 2.0f));
         }
     }
 
-    // START, BACK and the two triggers
-    static const struct {
-        int button;
-        const char* text;
-    } kPills[] = {{kBtnBack, "BACK"},   {kBtnStart, "START"}, {kBtnLT, "LT"},   {kBtnRT, "RT"},
-                  {kBtnL3, "L3"},       {kBtnR3, "R3"},       {kBtnMap, "MAP"}, {kBtnOrders, "ORDERS"}};
-    for (int i = 0; i < kPillCount; i++) {
-        const auto& p = kPills[i];
-        ImVec2 c(l.pill[p.button][0], l.pill[p.button][1]);
-        dl->AddRectFilled(ImVec2(c.x - l.pill_w / 2, c.y - l.pill_h / 2), ImVec2(c.x + l.pill_w / 2, c.y + l.pill_h / 2),
-                          IM_COL32(20, 20, 20, at(150)), l.pill_h / 2);
-        dl->AddRect(ImVec2(c.x - l.pill_w / 2, c.y - l.pill_h / 2), ImVec2(c.x + l.pill_w / 2, c.y + l.pill_h / 2),
-                    line, l.pill_h / 2, 0, 1.5f);
-        float size = l.pill_h * 0.46f;
-        ImVec2 t = font->CalcTextSizeA(size, FLT_MAX, 0, p.text);
-        dl->AddText(font, size, ImVec2(c.x - t.x / 2, c.y - t.y / 2), label, p.text);
+    // the pad's other buttons as pills: an icon for what it does in the game beside the pad's name for it, or for MAP
+    // and ORDERS (the pad's Black and White) a dot in the button's colour; held, a pill turns vermilion, its rim gold
+    {
+        static const struct {
+            int button;
+            const float* icon;
+            int label;
+        } kPills[] = {{kBtnBack, nullptr, kArtBack},            {kBtnStart, nullptr, kArtStart},
+                      {kBtnLT, ui_paths::kGuard, kArtLT},       {kBtnRT, ui_paths::kBow, kArtRT},
+                      {kBtnL3, nullptr, kArtL3},                {kBtnR3, ui_paths::kRage, kArtR3},
+                      {kBtnMap, ui_paths::kMap, kArtNone},      {kBtnOrders, ui_paths::kOrders, kArtNone}};
+        const uint64_t analog = g_analog.load();
+        const uint32_t buttons = g_buttons.load();
+        for (const auto& p : kPills) {
+            ImVec2 c(l.pill[p.button][0], l.pill[p.button][1]);
+            const float w = l.pill_w, h = l.pill_h;
+            bool on = false;
+            switch (p.button) {
+                case kBtnLT: on = (analog >> (kLeftTrigger * 8)) & 0xFF; break;
+                case kBtnRT: on = (analog >> (kRightTrigger * 8)) & 0xFF; break;
+                case kBtnMap: on = (analog >> (kBlack * 8)) & 0xFF; break;
+                case kBtnOrders: on = (analog >> (kWhite * 8)) & 0xFF; break;
+                case kBtnStart: on = buttons & kStart; break;
+                case kBtnBack: on = buttons & kBack; break;
+                case kBtnL3: on = buttons & kLeftThumb; break;
+                case kBtnR3: on = buttons & kRightThumb; break;
+                default: break;
+            }
+            const bool white = p.button == kBtnOrders, black = p.button == kBtnMap;
+            ImU32 fg = on ? kGold : ink;
+            ImVec2 a(c.x - w / 2, c.y - h / 2), z(c.x + w / 2, c.y + h / 2);
+            dl->AddRectFilled(a, z, on ? lit : base, h / 2);
+            dl->AddRect(a, z, on ? kGold : rim, h / 2, 0, on ? std::max(h * 0.045f, 2.0f) : std::max(h * 0.022f, 1.2f));
+            // the icon and the label (or the dot) side by side, centred together
+            float ih = h * 0.64f, lh = h * 0.50f, gap = h * 0.14f, dot = h * 0.17f;
+            float iw = p.icon ? ih : 0;
+            float lw = p.label >= 0 ? lh * g_art[p.label].aspect : white || black ? dot * 2 : 0;
+            float total = iw + lw + (iw > 0 && lw > 0 ? gap : 0);
+            float x = c.x - total / 2;
+            if (p.icon) {
+                DrawIcon(dl, p.icon, ImVec2(x + iw / 2, c.y), ih, fg);
+                x += iw + gap;
+            }
+            if (p.label >= 0) {
+                DrawArt(dl, p.label, ImVec2(x + lw / 2, c.y), lh, fg);
+            } else if (white || black) {
+                ImVec2 o(x + dot, c.y);
+                dl->AddCircleFilled(o, dot, white ? IM_COL32(240, 238, 232, at(240)) : IM_COL32(4, 4, 4, at(240)), 24);
+                dl->AddCircle(o, dot, white ? IM_COL32(0, 0, 0, at(90)) : IM_COL32(255, 255, 255, at(170)), 24,
+                              std::max(h * 0.025f, 1.2f));
+            }
+        }
     }
     if (g_editing.load(std::memory_order_relaxed)) DrawEditor(l, dl);
 }
