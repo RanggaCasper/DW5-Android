@@ -547,9 +547,8 @@ void Draw() {
     const float fade = std::clamp(game::Opt().controls_opacity / 100.0f, 0.2f, 1.0f);
     auto at = [fade](int a) { return int(std::lround(float(a) * fade)); };
     // The look: flat discs of black lacquer with one thin rim; what a button does in the game is its icon in white, and
-    // which of the pad's buttons it is rides on its rim. Held, a control turns to vermilion lacquer with a gold rim.
-    const ImU32 kGold = IM_COL32(236, 190, 88, at(240));
-    const ImU32 base = IM_COL32(14, 13, 18, at(170)), lit = IM_COL32(150, 30, 22, at(215));
+    // which of the pad's buttons it is rides on its rim. Held, a control's lacquer darkens.
+    const ImU32 base = IM_COL32(14, 13, 18, at(170)), lit = IM_COL32(4, 4, 6, at(230));
     const ImU32 rim = IM_COL32(255, 255, 255, at(72)), ink = IM_COL32(255, 255, 255, at(235));
 
     // the gear, drawn as the other controls are: a lacquer disc with a thin rim, the gear's outline in it
@@ -591,7 +590,7 @@ void Draw() {
     EnsureArt();
     auto disc = [&](ImVec2 c, float r, bool on) {
         dl->AddCircleFilled(c, r, on ? lit : base, 48);
-        dl->AddCircle(c, r, on ? kGold : rim, 48, on ? std::max(r * 0.045f, 2.0f) : std::max(r * 0.022f, 1.2f));
+        dl->AddCircle(c, r, rim, 48, std::max(r * 0.022f, 1.2f));
     };
 
     // the stick: its well, and the knob pushed as far as the finger has it
@@ -603,7 +602,7 @@ void Draw() {
         ImVec2 k(c.x + x * l.stick_r * 0.62f, c.y - y * l.stick_r * 0.62f);
         float kr = l.stick_r * 0.42f;
         dl->AddCircleFilled(k, kr, on ? lit : IM_COL32(36, 34, 42, at(220)), 40);
-        dl->AddCircle(k, kr, on ? kGold : IM_COL32(255, 255, 255, at(110)), 40, std::max(kr * 0.05f, 1.2f));
+        dl->AddCircle(k, kr, IM_COL32(255, 255, 255, at(110)), 40, std::max(kr * 0.05f, 1.2f));
     }
 
     // the four face buttons: what each does in the game, and the pad's own letter on its badge, in the pad's colours
@@ -619,7 +618,7 @@ void Draw() {
             float r = l.btn_r;
             bool on = (held >> (kAnalogOf[b] * 8)) & 0xFF;
             disc(c, r, on);
-            DrawIcon(dl, kIcon[b], ImVec2(c.x - r * 0.05f, c.y - r * 0.05f), r * 1.12f, on ? kGold : ink);
+            DrawIcon(dl, kIcon[b], ImVec2(c.x - r * 0.05f, c.y - r * 0.05f), r * 1.12f, ink);
             // the badge on the rim, low on the right, set off from the disc by a ring of the lacquer's colour
             ImVec2 bc(c.x + r * 0.70f, c.y + r * 0.70f);
             float br = r * 0.36f;
@@ -644,12 +643,12 @@ void Draw() {
             ImVec2 b1(c.x - dx * t * 0.5f - dy * t, c.y - dy * t * 0.5f + dx * t);
             ImVec2 b2(c.x - dx * t * 0.5f + dy * t, c.y - dy * t * 0.5f - dx * t);
             ImVec2 pts[3] = {b1, tip, b2};
-            dl->AddPolyline(pts, 3, on ? kGold : ink, ImDrawFlags_None, std::max(r * 0.11f, 2.0f));
+            dl->AddPolyline(pts, 3, ink, ImDrawFlags_None, std::max(r * 0.11f, 2.0f));
         }
     }
 
     // the pad's other buttons as pills: an icon for what it does in the game beside the pad's name for it, or for MAP
-    // and ORDERS (the pad's Black and White) a dot in the button's colour; held, a pill turns vermilion, its rim gold
+    // and ORDERS (the pad's Black and White) a dot in the button's colour; held, a pill darkens
     {
         static const struct {
             int button;
@@ -677,10 +676,10 @@ void Draw() {
                 default: break;
             }
             const bool white = p.button == kBtnOrders, black = p.button == kBtnMap;
-            ImU32 fg = on ? kGold : ink;
+            ImU32 fg = ink;
             ImVec2 a(c.x - w / 2, c.y - h / 2), z(c.x + w / 2, c.y + h / 2);
             dl->AddRectFilled(a, z, on ? lit : base, h / 2);
-            dl->AddRect(a, z, on ? kGold : rim, h / 2, 0, on ? std::max(h * 0.045f, 2.0f) : std::max(h * 0.022f, 1.2f));
+            dl->AddRect(a, z, rim, h / 2, 0, std::max(h * 0.022f, 1.2f));
             // the icon and the label (or the dot) side by side, centred together
             float ih = h * 0.64f, lh = h * 0.50f, gap = h * 0.14f, dot = h * 0.17f;
             float iw = p.icon ? ih : 0;

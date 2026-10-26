@@ -1133,7 +1133,7 @@ private:
     void StageSamplers(const State& s, const DrawTextures& stages, bool clamp, VkSampler (&out)[4]);
     bool Linear(VkFormat f);
     std::unordered_map<VkFormat, bool> linear_;
-    void SetViewportScissor(const State& s, uint32_t gw);
+    void SetViewportScissor(const State& s, uint32_t gw, bool pretransformed);
     void SetBlendFactorStencilRef(const State& s, const PsoKey& k);
     void DrawGeometry(const Assembled& a);
     // shaders by source hash: Compile returns the module and sets hash
@@ -3797,8 +3797,9 @@ void VulkanBackend::FillTexelConstants(int i, const TextureDesc& d, const DrawTe
 
 // A pretransformed quad's stage 0 reads held to its own texels. The console samples a quad drawn texel for texel
 // from its first texel centre to its last, one texel short of the far coordinates; drawn larger here, the bilinear
-// reads past that take in the neighbouring cell of an atlas (the font's next row and column). Any other draw is left
-// alone.
+// reads past that take in the neighbouring cell of an atlas (the font's next row and column). Across, the reads go to
+// the centre of the last texel the far u reaches instead, still none of the next cell: a texel short cut the last
+// column, the outline, off Dynasty Warriors 5's menu words. Any other draw is left alone.
 void UvClamp(const State& s, const DrawTextures& stages, DrawConstants& c) {
     constexpr float kOpen = 1e30f;
     c.uvclamp[0] = c.uvclamp[1] = -kOpen;
@@ -3808,9 +3809,10 @@ void UvClamp(const State& s, const DrawTextures& stages, DrawConstants& c) {
         !Describe(s.textures[0], d) || !d.width || !d.height)
         return;
     const auto& q = s.quad_uv;
+    const float w = float(d.width);
     c.uvclamp[0] = q[0];
     c.uvclamp[1] = q[1];
-    c.uvclamp[2] = std::max(q[0], q[2] - 1.0f / float(d.width));
+    c.uvclamp[2] = std::max(q[0], (std::ceil(q[2] * w - 1e-3f) - 0.5f) / w);
     c.uvclamp[3] = std::max(q[1], q[3] - 1.0f / float(d.height));
 }
 
@@ -3820,6 +3822,8 @@ void VulkanBackend::FillTextureConstants(const State& s, const DrawShaders& sh, 
         TextureDesc d;
         if (s.textures[size_t(i)] && Describe(s.textures[size_t(i)], d)) FillTexelConstants(i, d, stages, c);
         if (stages.rt[i]) c.rtshift[i] = RenderTargetShift(s, sh);
+        // a pretransformed draw's reads half a console pixel up and left, a target's on top of its own shift
+        if (stages.info[i].flags & kTexShift) c.rtshift[i] += -0.5f * TargetScale();
         const auto& t = s.tss[size_t(i)];
         c.bump[i][0] = Bits(t[kTssBumpEnvMat00]);
         c.bump[i][1] = Bits(t[kTssBumpEnvMat01]);
@@ -4070,21 +4074,28 @@ void VulkanBackend::SetTextureViewsAndSamplers(const State& s, const Assembled& 
     StageSamplers(s, stages, AnyStageWraps(s) && UnitTexcoords(a), b.samplers);
 }
 
-// viewport covers the target, the guest viewport is in the shader; scissor clips to it
-void VulkanBackend::SetViewportScissor(const State& s, uint32_t gw) {
+// viewport covers the target, the guest viewport is in the shader; scissor clips to it. The console's viewport only
+// places transformed vertices, so XYZRHW draws are left whole: Dynasty Warriors 5 draws a cutscene's black letterbox
+// with the viewport still on the picture between the bars, and cut to it the bars were never drawn.
+void VulkanBackend::SetViewportScissor(const State& s, uint32_t gw, bool pretransformed) {
     uint32_t W = bound_rt_ ? bound_rt_->w : bound_ds_->w;
     uint32_t H = bound_rt_ ? bound_rt_->h : bound_ds_->h;
     SetViewport(0, 0, float(W), float(H));
     float sc = float(W) / float(gw);
-    int32_t x0 = HostEdge(int32_t(s.viewport.x), sc, W, false);
-    int32_t y0 = HostEdge(int32_t(s.viewport.y), sc, H, false);
-    int32_t x1 = HostEdge(int32_t(s.viewport.x + s.viewport.w), sc, W, true);
-    int32_t y1 = HostEdge(int32_t(s.viewport.y + s.viewport.h), sc, H, true);
+    int32_t x0 = 0, y0 = 0, x1 = int32_t(W), y1 = int32_t(H);
+    if (!pretransformed) {
+        x0 = HostEdge(int32_t(s.viewport.x), sc, W, false);
+        y0 = HostEdge(int32_t(s.viewport.y), sc, H, false);
+        x1 = HostEdge(int32_t(s.viewport.x + s.viewport.w), sc, W, true);
+        y1 = HostEdge(int32_t(s.viewport.y + s.viewport.h), sc, H, true);
+    }
+    // a scissor rect's far corner is its last pixel (the whole screen is 0 0 511 447): taken as the edge past it, the
+    // last row of a cutscene's picture went undrawn, a line of the clear colour above the bottom letterbox bar
     if (s.scissor_count) {
         x0 = std::max(x0, HostEdge(int32_t(s.scissors[0]), sc, W, false));
         y0 = std::max(y0, HostEdge(int32_t(s.scissors[1]), sc, H, false));
-        x1 = std::min(x1, HostEdge(int32_t(s.scissors[2]), sc, W, true));
-        y1 = std::min(y1, HostEdge(int32_t(s.scissors[3]), sc, H, true));
+        x1 = std::min(x1, HostEdge(int32_t(s.scissors[2]) + 1, sc, W, true));
+        y1 = std::min(y1, HostEdge(int32_t(s.scissors[3]) + 1, sc, H, true));
     }
     SetScissor({x0, y0, x1, y1});
 }
@@ -4166,6 +4177,9 @@ void VulkanBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t
     // stage textures, then the pixel shader made for them
     DrawTextures stages;
     if (!BindStageTexturesAndTargets(s, stages)) return;
+    if (a.pretransformed)
+        for (auto& t : stages.info)
+            if (t.kind) t.flags |= kTexShift;
     PixelKey pk = MakePixelKey(s, stages.info);
     sh.near_depth = NearDepth(s);
     sh.pkey = Hash(&pk, sizeof(pk)) ^ (sh.near_depth ? kNearDepthSalt : 0);
@@ -4195,7 +4209,7 @@ void VulkanBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t
     // texture views and samplers, viewport and scissor, blend factor and stencil reference
     SetTextureViewsAndSamplers(s, a, stages, b);
     PushBindings(b);
-    SetViewportScissor(s, size.w);
+    SetViewportScissor(s, size.w, a.pretransformed);
     SetBlendFactorStencilRef(s, k);
 
     // geometry
