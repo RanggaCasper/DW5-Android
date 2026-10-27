@@ -80,6 +80,8 @@ public class DW5Activity extends SDLActivity {
     static native int[] nativeSettings();
     static native void nativeSettingsSet(int key, int value, boolean commit);
     static native void nativeSettingsDefaults();
+    static native boolean[] nativeCheats();
+    static native void nativeCheatSet(int index, boolean on);
     static native void nativeEditLayout();
     static native void nativeEditEnd();
     static native void nativeEditReset();

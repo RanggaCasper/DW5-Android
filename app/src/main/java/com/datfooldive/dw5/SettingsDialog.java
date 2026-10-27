@@ -50,8 +50,8 @@ class SettingsDialog extends Dialog {
     private final Slider[] bars = new Slider[COUNT];
     private boolean loading;  // a reload filling the widgets is not a change to write back
 
-    private final TextView[] tabs = new TextView[4];
-    private final LinearLayout[] pages = new LinearLayout[4];
+    private final TextView[] tabs = new TextView[5];
+    private final LinearLayout[] pages = new LinearLayout[5];
 
     private TextView antiAliasText, anisoText, aspectText;
     private TextView vsync, frameSkip, fps, hdr;
@@ -81,8 +81,8 @@ class SettingsDialog extends Dialog {
         LinearLayout bar = new LinearLayout(activity);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setPadding(0, dp(2), 0, dp(4));
-        String[] names = {"GRAPHICS", "PERFORMANCE", "DISPLAY", "CONTROLS"};
-        for (int i = 0; i < 4; i++) {
+        String[] names = {"GRAPHICS", "PERFORMANCE", "DISPLAY", "CONTROLS", "CHEATS"};
+        for (int i = 0; i < names.length; i++) {
             final int at = i;
             tabs[i] = chip(names[i], 12);
             tabs[i].setOnClickListener(x -> select(at));
@@ -93,7 +93,7 @@ class SettingsDialog extends Dialog {
         root.addView(bar);
         root.addView(line());
 
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < pages.length; i++) {
             pages[i] = new LinearLayout(activity);
             pages[i].setOrientation(LinearLayout.VERTICAL);
             pages[i].setVisibility(View.GONE);
@@ -102,12 +102,19 @@ class SettingsDialog extends Dialog {
         performance(pages[1]);
         display(pages[2]);
         controls(pages[3]);
+        cheats(pages[4]);
 
         LinearLayout holder = new LinearLayout(activity);
         holder.setOrientation(LinearLayout.VERTICAL);
         for (LinearLayout p : pages) holder.addView(p);
-        ScrollView scroll = new ScrollView(activity);
-        scroll.setVerticalScrollBarEnabled(false);
+        // the rows held to what the screen leaves under the title, the tabs and the footer; a longer page scrolls
+        ScrollView scroll = new ScrollView(activity) {
+            @Override
+            protected void onMeasure(int widthSpec, int heightSpec) {
+                int max = (int) (getResources().getDisplayMetrics().heightPixels * 0.55f);
+                super.onMeasure(widthSpec, MeasureSpec.makeMeasureSpec(max, MeasureSpec.AT_MOST));
+            }
+        };
         scroll.addView(holder);
         root.addView(scroll);
 
@@ -169,6 +176,34 @@ class SettingsDialog extends Dialog {
                 ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.topMargin = dp(10);
         box.addView(edit, lp);
+    }
+
+    // the game has no codes of its own: these are kept up by the port (src/common/cheats.cpp), and saved with the settings
+    private void cheats(LinearLayout box) {
+        box.addView(text("Kept until switched off. Health and musou take effect in battle; the unlocks stay once the game saves.", 11, DIM));
+        String[] names = {"INFINITE HEALTH", "INFINITE MUSOU", "UNLOCK ALL", "ALL WEAPONS", "MAX OFFICERS",
+                "MAX BODYGUARDS", "INFINITE RAGE", "FREEZE TIMER", "MAX SPEED"};
+        boolean[] on = DW5Activity.nativeCheats();
+        for (int i = 0; i < names.length; i++) {
+            final int at = i;
+            LinearLayout row = new LinearLayout(getContext());
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(0, dp(3), 0, dp(3));
+            row.addView(text(names[i], 13, TEXT), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            TextView sw = text("", 14, GRAB_ON);
+            sw.setGravity(Gravity.CENTER);
+            sw.setBackgroundColor(FRAME);
+            sw.setClickable(true);
+            sw.setOnClickListener(x -> {
+                boolean next = !Boolean.TRUE.equals(sw.getTag());
+                paint(sw, next);
+                DW5Activity.nativeCheatSet(at, next);
+            });
+            paint(sw, at < on.length && on[at]);
+            row.addView(sw, new LinearLayout.LayoutParams(dp(26), dp(26)));
+            box.addView(row);
+        }
     }
 
     // a row whose value is dragged: the label, and an ImGui slider with the value inside it
@@ -288,7 +323,7 @@ class SettingsDialog extends Dialog {
     // ---------------------------------------------------------------- the panel
 
     private void select(int at) {
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < pages.length; i++) {
             pages[i].setVisibility(i == at ? View.VISIBLE : View.GONE);
             tabs[i].setBackground(box(i == at ? BUTTON_ON : BUTTON, false));
         }

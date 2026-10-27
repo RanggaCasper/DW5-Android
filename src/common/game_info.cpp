@@ -57,7 +57,16 @@ const app::GameInfo app::kGame = {
                 {"aspect", nullptr, &game::Opt().aspect},
                 {"controls_opacity", nullptr, &game::Opt().controls_opacity},
                 {"controls_scale", nullptr, &game::Opt().controls_scale},
-                {"hdr_output", &game::Opt().hdr_output, nullptr}},
+                {"hdr_output", &game::Opt().hdr_output, nullptr},
+                {"cheat_infinite_health", &game::Opt().cheats[0], nullptr},
+                {"cheat_infinite_musou", &game::Opt().cheats[1], nullptr},
+                {"cheat_unlock_all", &game::Opt().cheats[2], nullptr},
+                {"cheat_all_weapons", &game::Opt().cheats[3], nullptr},
+                {"cheat_max_officers", &game::Opt().cheats[4], nullptr},
+                {"cheat_max_bodyguards", &game::Opt().cheats[5], nullptr},
+                {"cheat_infinite_rage", &game::Opt().cheats[6], nullptr},
+                {"cheat_freeze_timer", &game::Opt().cheats[7], nullptr},
+                {"cheat_max_speed", &game::Opt().cheats[8], nullptr}},
     .load = LoadControls,                   // reads more from the settings file's toml::table
     .save = SaveControls,                   // writes more into it
     .init = game::Init,                     // after the settings load, before the window and boot

@@ -119,12 +119,15 @@ void Keyboard(input::Pad& p) {
     p.ry = Axis(keys, SDL_SCANCODE_KP_2, SDL_SCANCODE_KP_8, p.ry);
 }
 
-// GameInfo::pad: the keyboard and the on-screen controls on port 1
+void Cheats();  // cheats.cpp
+
+// GameInfo::pad: the keyboard and the on-screen controls on port 1, and the cheats kept up each poll
 void PadHook(int port, input::Pad& p) {
     if (port != 0) return;
     Keyboard(p);
     touch::Apply(p);
     Script(p);
+    Cheats();
 }
 
 }  // namespace game

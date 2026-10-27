@@ -18,6 +18,7 @@ struct Options {
                                  // 3 the whole screen covered, what overflows cut (Android)
     uint32_t controls_opacity = 100;  // the on-screen controls' opacity, 20 to 100% (Android)
     uint32_t controls_scale = 100;    // their size, 50 to 150% (Android); the layout editor sets where they sit
+    bool cheats[9] = {};              // the CHEATS tab's switches, in common/cheats.cpp's order (Android)
 };
 
 inline Options& Opt() {
